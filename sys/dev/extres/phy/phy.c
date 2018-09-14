@@ -59,6 +59,7 @@ typedef TAILQ_HEAD(phy_list, phy) phy_list_t;
 static int phynode_method_init(struct phynode *phynode);
 static int phynode_method_enable(struct phynode *phynode, bool disable);
 static int phynode_method_status(struct phynode *phynode, int *status);
+static int phynode_method_set_mode(struct phynode *phynode, int mode);
 
 
 /*
@@ -68,6 +69,7 @@ static phynode_method_t phynode_methods[] = {
 	PHYNODEMETHOD(phynode_init,		phynode_method_init),
 	PHYNODEMETHOD(phynode_enable,		phynode_method_enable),
 	PHYNODEMETHOD(phynode_status,		phynode_method_status),
+	PHYNODEMETHOD(phynode_set_mode,		phynode_method_set_mode),
 
 	PHYNODEMETHOD_END
 };
@@ -148,6 +150,13 @@ phynode_method_status(struct phynode *phynode, int *status)
 {
 	*status = PHY_STATUS_ENABLED;
 	return (0);
+}
+
+static int
+phynode_method_set_mode(struct phynode *phynode, int  mode)
+{
+
+	return (EOPNOTSUPP);
 }
 
 /* ----------------------------------------------------------------------------
@@ -335,6 +344,22 @@ phynode_status(struct phynode *phynode, int *status)
 	return (rv);
 }
 
+/*
+ * Set phy mode.
+ */
+int
+phynode_set_mode(struct phynode *phynode, int mode)
+{
+	int rv;
+
+	PHY_TOPO_ASSERT();
+
+	PHYNODE_XLOCK(phynode);
+	rv = PHYNODE_SET_MODE(phynode, mode);
+	PHYNODE_UNLOCK(phynode);
+	return (0);
+}
+
  /* --------------------------------------------------------------------------
  *
  * Phy consumers interface.
@@ -456,6 +481,22 @@ phy_release(phy_t phy)
 	PHY_TOPO_UNLOCK();
 
 	free(phy, M_PHY);
+}
+
+int
+phy_set_mode(phy_t phy, int mode)
+{
+	int rv;
+	struct phynode *phynode;
+
+	phynode = phy->phynode;
+	KASSERT(phynode->ref_cnt > 0,
+	   ("Attempt to access unreferenced phy.\n"));
+
+	PHY_TOPO_SLOCK();
+	rv = phynode_set_mode(phynode, mode);
+	PHY_TOPO_UNLOCK();
+	return (rv);
 }
 
 #ifdef FDT

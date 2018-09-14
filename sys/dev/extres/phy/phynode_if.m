@@ -58,4 +58,11 @@ METHOD int status {
 	int		*status;    /* PHY_STATUS_* */
 };
 
-
+#
+# Set phy mode
+# Returns 0 on success or a standard errno value.
+#
+METHOD int set_mode {
+	struct phynode	*phynode;
+	int	mode;
+};
