@@ -143,8 +143,10 @@ struct awusbphy_softc {
 
  /* Phy class and methods. */
 static int awusbphy_phy_enable(struct phynode *phy, bool enable);
+static int awusbphy_set_mode(struct phynode *phy, int mode);
 static phynode_method_t awusbphy_phynode_methods[] = {
 	PHYNODEMETHOD(phynode_enable, awusbphy_phy_enable),
+	PHYNODEMETHOD(phynode_set_mode, awusbphy_set_mode),
 
 	PHYNODEMETHOD_END
 };
@@ -287,7 +289,7 @@ awusbphy_vbus_detect(device_t dev, int *val)
 		return (0);
 	}
 
-	*val = 1;
+	*val = 0;
 	return (0);
 }
 
@@ -315,30 +317,22 @@ awusbphy_phy_enable(struct phynode *phynode, bool enable)
 	if (reg == NULL)
 		return (0);
 
-	if (enable) {
+	if (phy == 0) {
 		/* If an external vbus is detected, do not enable phy 0 */
-		if (phy == 0) {
-			error = awusbphy_vbus_detect(dev, &vbus_det);
-			if (error)
-				goto out;
+		error = awusbphy_vbus_detect(dev, &vbus_det);
+		if (error)
+			goto out;
 
-			/* Depending on the PHY we need to route OTG to OHCI/EHCI */
-			if (sc->phy_conf->phy0_route == true) {
-				if (vbus_det == 0)
-					/* Host mode */
-					CLR4(sc->phy_ctrl, OTG_PHY_CFG,
-					     OTG_PHY_ROUTE_OTG);
-				else
-					/* Peripheral mode */
-					SET4(sc->phy_ctrl, OTG_PHY_CFG,
-					     OTG_PHY_ROUTE_OTG);
-			}
-			if (vbus_det == 1)
-				return (0);
-		} else
-			error = 0;
-		if (error == 0)
-			error = regulator_enable(reg);
+		if (vbus_det == 1) {
+			if (bootverbose)
+				device_printf(dev, "External VBUS detected, not enabling the regulator\n");
+
+			return (0);
+		}
+	}
+	if (enable) {
+		/* Depending on the PHY we need to route OTG to OHCI/EHCI */
+		error = regulator_enable(reg);
 	} else
 		error = regulator_disable(reg);
 
@@ -350,6 +344,54 @@ out:
 		return (error);
 	}
 
+	return (0);
+}
+
+static int
+awusbphy_set_mode(struct phynode *phynode, int mode)
+{
+	device_t dev;
+	intptr_t phy;
+	struct awusbphy_softc *sc;
+	uint32_t val;
+	int error, vbus_det;
+
+	dev = phynode_get_device(phynode);
+	phy = phynode_get_id(phynode);
+	sc = device_get_softc(dev);
+
+	if (phy != 0)
+		return (EINVAL);
+
+	switch (mode) {
+	case PHY_MODE_USB_HOST:
+		val = bus_read_4(sc->phy_ctrl, PHY_CSR);
+		val &= ~(VBUS_CHANGE_DET | ID_CHANGE_DET | DPDM_CHANGE_DET);
+		val |= (ID_PULLUP_EN | DPDM_PULLUP_EN);
+		val &= ~FORCE_ID;
+		val |= (FORCE_ID_LOW << FORCE_ID_SHIFT);
+		val &= ~FORCE_VBUS_VALID;
+		val |= (FORCE_VBUS_VALID_HIGH << FORCE_VBUS_VALID_SHIFT);
+		bus_write_4(sc->phy_ctrl, PHY_CSR, val);
+		break;
+	case PHY_MODE_USB_OTG:
+		/* TODO */
+		break;
+	}
+
+	if (sc->phy_conf->phy0_route == true) {
+		error = awusbphy_vbus_detect(dev, &vbus_det);
+		if (error)
+			goto out;
+		if (vbus_det == 0)
+			CLR4(sc->phy_ctrl, OTG_PHY_CFG,
+			  OTG_PHY_ROUTE_OTG);
+		else
+			SET4(sc->phy_ctrl, OTG_PHY_CFG,
+			  OTG_PHY_ROUTE_OTG);
+	}
+
+out:
 	return (0);
 }
 
