@@ -1,0 +1,107 @@
+# $FreeBSD$
+# Utility functions
+##
+
+v6_init()
+{
+	if [ "`sysctl -i -n kern.features.vimage`" != 1 ]; then
+		atf_skip "This test requires VIMAGE"
+	fi
+}
+
+v6_mkepair()
+{
+	ifname=$(ifconfig epair create)
+	echo $ifname >> created_interfaces.lst
+	echo ${ifname%a}
+}
+
+v6_mktarget()
+{
+ 	LOCAL="$1/64"
+	REMOTE="$2/64"
+	epair=$(v6_mkepair)
+	v6_mkjail jail1 ${epair}a
+ 	ifconfig ${epair}b inet6 ${LOCAL} no_dad up	
+	jexec jail1 ifconfig ${epair}a inet6 ${REMOTE} no_dad up
+        LOCAL_MAC="$(ifconfig ${epair}b | grep ether | awk '{ print $2}')"
+	REMOTE_MAC="$(jexec jail1 ifconfig ${epair}a | grep ether | awk '{ print $2}')"
+	LOCAL_IF="${epair}b"   
+}
+
+v6_mkjail()
+{
+	jailname=$1
+	shift
+
+	vnet_interfaces=
+	for ifname in $@
+	do
+		vnet_interfaces="${vnet_interfaces} vnet.interface=${ifname}"
+	done
+	jail -c name=${jailname} persist vnet ${vnet_interfaces}
+
+	echo $jailname >> created_jails.lst
+}
+
+v6_scapytestscript() 
+{
+	BASE_FOLDER=$1
+        TEST_SCRIPT=$2
+        LOCAL_IF=$3
+	LOCAL_MAC=$4
+	REMOTE_MAC=$5
+	LOCAL_ADDR6=$6
+	REMOTE_ADDR6=$7
+
+
+	ADDR_FILE=$BASE_FOLDER/addr.py
+        [ -f $ADDR_FILE ] && rm $ADDR_FILE
+        touch $ADDR_FILE
+
+        echo "LOCAL_IF = '${LOCAL_IF}'" >> $ADDR_FILE
+        echo "LOCAL_MAC = '${LOCAL_MAC}'" >> $ADDR_FILE
+        echo "REMOTE_MAC = '${REMOTE_MAC}'" >> $ADDR_FILE
+        echo "LOCAL_ADDR6 = '${LOCAL_ADDR6}'" >> $ADDR_FILE
+        echo "REMOTE_ADDR6 = '${REMOTE_ADDR6}'" >> $ADDR_FILE
+
+        FULL_PATH="$BASE_FOLDER/$TEST_SCRIPT"
+        OUTPUT="$(python2 $FULL_PATH)"
+        if [ $? -eq 0 ]; then
+        	echo "$script: PASSED"
+        else
+        	echo "$script: FAILED with exit code $?"
+                echo $OUTPUT
+        fi
+}
+
+v6_scapytest()
+{       
+	BASE_FOLDER=$1
+	TEST_SCRIPT=$2
+	echo $TEST_SCRIPT
+	LOCAL_ADDR6="2001:db8:42::1"
+        REMOTE_ADDR6="2001:db8:42::2"
+        v6_mktarget $LOCAL_ADDR6 $REMOTE_ADDR6
+        
+	v6_scapytestscript $BASE_FOLDER $TEST_SCRIPT $LOCAL_IF $LOCAL_MAC $REMOTE_MAC $LOCAL_ADDR6 $REMOTE_ADDR6
+}
+
+v6_cleanup()
+{
+	if [ -f created_jails.lst ]; then
+		for jailname in `cat created_jails.lst`
+		do
+			jail -r ${jailname}
+		done
+		rm created_jails.lst
+	fi
+
+	if [ -f created_interfaces.lst ]; then
+		for ifname in `cat created_interfaces.lst`
+		do
+			ifconfig ${ifname} destroy
+		done
+		rm created_interfaces.lst
+	fi
+}

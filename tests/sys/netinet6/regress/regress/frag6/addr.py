@@ -1,0 +1,5 @@
+LOCAL_IF = 'epair0b'
+LOCAL_MAC = '02:67:3a:1d:2d:0b'
+REMOTE_MAC = '02:67:3a:1d:2d:0a'
+LOCAL_ADDR6 = '2001:db8:42::1'
+REMOTE_ADDR6 = '2001:db8:42::2'
