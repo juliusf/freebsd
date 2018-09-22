@@ -4,6 +4,6 @@
 
 TESTSDIR=		${TESTSBASE}/sys/netinet6
 
-TESTS_SUBDIRS+=		regress
+TESTS_SUBDIRS+=		ipv6
 
 .include <bsd.test.mk>
