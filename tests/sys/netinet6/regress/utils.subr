@@ -44,7 +44,7 @@ v6_mkjail()
 	echo $jailname >> created_jails.lst
 }
 
-v6_scapytestscript() 
+v6_runscapytest() 
 {
 	BASE_FOLDER=$1
         TEST_SCRIPT=$2
@@ -66,14 +66,9 @@ v6_scapytestscript()
         echo "REMOTE_ADDR6 = '${REMOTE_ADDR6}'" >> $ADDR_FILE
 
         FULL_PATH="$BASE_FOLDER/$TEST_SCRIPT"
-        OUTPUT="$(python2 $FULL_PATH)"
-        if [ $? -eq 0 ]; then
-        	echo "$script: PASSED"
-        else
-        	echo "$script: FAILED with exit code $?"
-                echo $OUTPUT
-        fi
-}
+        atf_check -s exit:0 -o ignore python2 $FULL_PATH
+        
+	}
 
 v6_scapytest()
 {       
@@ -84,7 +79,7 @@ v6_scapytest()
         REMOTE_ADDR6="2001:db8:42::2"
         v6_mktarget $LOCAL_ADDR6 $REMOTE_ADDR6
         
-	v6_scapytestscript $BASE_FOLDER $TEST_SCRIPT $LOCAL_IF $LOCAL_MAC $REMOTE_MAC $LOCAL_ADDR6 $REMOTE_ADDR6
+	v6_runscapytest $BASE_FOLDER $TEST_SCRIPT $LOCAL_IF $LOCAL_MAC $REMOTE_MAC $LOCAL_ADDR6 $REMOTE_ADDR6
 }
 
 v6_cleanup()

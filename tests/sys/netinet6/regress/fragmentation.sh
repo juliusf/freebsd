@@ -13,7 +13,7 @@ frag6_head()
 frag6_body()
 {
 	v6_init
-	#v6_scapytest 'regress/frag6/frag6.py'
+	v6_scapytest 'regress/frag6' 'frag6.py'
 }
 
 frag6_cleanup()
