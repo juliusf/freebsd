@@ -3,7 +3,7 @@
 PACKAGE=	tests
 
 TESTSDIR=       ${TESTSBASE}/sys/netinet6/regress
-
+TESTS_SUBDIRS+= regress
 ATF_TESTS_SH+=	fragmentation
 
 ${PACKAGE}FILES+=	utils.subr 
