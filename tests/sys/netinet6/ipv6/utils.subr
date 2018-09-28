@@ -55,7 +55,7 @@ v6_runscapytest()
 	REMOTE_ADDR6=$7
 
 
-	ADDR_FILE=$BASE_FOLDER/addr.py
+	ADDR_FILE=addr.py
         [ -f $ADDR_FILE ] && rm $ADDR_FILE
         touch $ADDR_FILE
 
@@ -64,9 +64,9 @@ v6_runscapytest()
         echo "REMOTE_MAC = '${REMOTE_MAC}'" >> $ADDR_FILE
         echo "LOCAL_ADDR6 = '${LOCAL_ADDR6}'" >> $ADDR_FILE
         echo "REMOTE_ADDR6 = '${REMOTE_ADDR6}'" >> $ADDR_FILE
-
-        FULL_PATH="$BASE_FOLDER/$TEST_SCRIPT"
-        atf_check -s exit:0 -o ignore python2 $FULL_PATH
+        
+	cp $(atf_get_srcdir)/$TEST_SCRIPT .
+        atf_check -s exit:0 -o ignore python2 $TEST_SCRIPT
         
 	}
 
@@ -74,7 +74,6 @@ v6_scapytest()
 {       
 	BASE_FOLDER=$1
 	TEST_SCRIPT=$2
-	echo $TEST_SCRIPT
 	LOCAL_ADDR6="2001:db8:42::1"
         REMOTE_ADDR6="2001:db8:42::2"
         v6_mktarget $LOCAL_ADDR6 $REMOTE_ADDR6
