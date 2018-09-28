@@ -746,6 +746,17 @@
         ..
         netinet
         ..
+        netinet6
+            ipv6
+                regress
+                    frag6
+                    nd6
+                    pktinfo_addr
+                    rh0
+                    ..
+                ..
+            ..
+        ..
         netipsec
             tunnel
             ..
