@@ -1,8 +1,9 @@
 /*-
- * SPDX-License-Identifier: BSD-3-Clause
- *
- * Copyright (c) 2008 David E. O'Brien
+ * Copyright (c) 2015-2018 The FreeBSD Foundation
  * All rights reserved.
+ *
+ * This software was developed by Konstantin Belousov <kib@FreeBSD.org>
+ * under sponsorship from the FreeBSD Foundation.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -12,14 +13,11 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. Neither the name of the author nor the names of its contributors
- *    may be used to endorse or promote products derived from this software
- *    without specific prior written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
  * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
  * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
@@ -31,39 +29,23 @@
  * $FreeBSD$
  */
 
-#ifndef _COMPAT_FREEBSD32_IOCTL_H_
-#define	_COMPAT_FREEBSD32_IOCTL_H_
+#ifndef __ARM64_IFUNC_H
+#define	__ARM64_IFUNC_H
 
-#include <cam/scsi/scsi_sg.h>
+#define	DEFINE_IFUNC(qual, ret_type, name, args, resolver_qual)		\
+    resolver_qual ret_type (*name##_resolver(void))args __used;		\
+    qual ret_type name args __attribute__((ifunc(#name "_resolver")));	\
+    resolver_qual ret_type (*name##_resolver(void))args
 
-typedef __uint32_t caddr_t32;
+#define	DEFINE_UIFUNC(qual, ret_type, name, args, resolver_qual)	\
+    resolver_qual ret_type (*name##_resolver(uint64_t, uint64_t,	\
+	uint64_t, uint64_t, uint64_t, uint64_t, uint64_t,		\
+	uint64_t))args __used;						\
+    qual ret_type name args __attribute__((ifunc(#name "_resolver")));	\
+    resolver_qual ret_type (*name##_resolver(uint64_t _arg1 __unused,	\
+	uint64_t _arg2 __unused, uint64_t _arg3 __unused,		\
+	uint64_t _arg4 __unused, uint64_t _arg5 __unused,		\
+	uint64_t _arg6 __unused, uint64_t _arg7 __unused,		\
+	uint64_t _arg8 __unused))args
 
-struct fiodgname_arg32 {
-	int		len;
-	caddr_t32	buf;
-};
-
-struct mem_range_op32
-{
-	caddr_t32	mo_desc;
-	int		mo_arg[2];
-};
-
-struct pci_bar_mmap32 {
-	uint32_t	pbm_map_base;
-	uint32_t	pbm_map_length;
-	uint32_t	pbm_bar_length1, pbm_bar_length2;
-	int		pbm_bar_off;
-	struct pcisel	pbm_sel;
-	int		pbm_reg;
-	int		pbm_flags;
-	int		pbm_memattr;
-};
-
-#define	FIODGNAME_32	_IOW('f', 120, struct fiodgname_arg32)
-#define	MEMRANGE_GET32	_IOWR('m', 50, struct mem_range_op32)
-#define	MEMRANGE_SET32	_IOW('m', 51, struct mem_range_op32)
-#define	SG_IO_32	_IOWR(SGIOC, 0x85, struct sg_io_hdr32)
-#define	PCIOCBARMMAP_32	_IOWR('p', 8, struct pci_bar_mmap32)
-
-#endif	/* _COMPAT_FREEBSD32_IOCTL_H_ */
+#endif
