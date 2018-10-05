@@ -37,6 +37,10 @@
 
 #define	PHY_STATUS_ENABLED	0x00000001
 
+#define	PHY_MODE_USB_HOST	1
+#define	PHY_MODE_USB_OTG	2
+#define	PHY_MODE_USB_DEVICE	3
+
 typedef struct phy *phy_t;
 
 /* Initialization parameters. */
@@ -68,6 +72,7 @@ intptr_t phynode_get_id(struct phynode *phynode);
 int phynode_enable(struct phynode *phynode);
 int phynode_disable(struct phynode *phynode);
 int phynode_status(struct phynode *phynode, int *status);
+int phynode_set_mode(struct phynode *phynode, int mode);
 #ifdef FDT
 phandle_t phynode_get_ofw_node(struct phynode *phynode);
 #endif
@@ -81,6 +86,7 @@ void phy_release(phy_t phy);
 int phy_enable(phy_t phy);
 int phy_disable(phy_t phy);
 int phy_status(phy_t phy, int *value);
+int phy_set_mode(phy_t phy, int mode);
 
 #ifdef FDT
 int phy_get_by_ofw_name(device_t consumer, phandle_t node, char *name,
