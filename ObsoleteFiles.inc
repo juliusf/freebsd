@@ -38,6 +38,30 @@
 #   xargs -n1 | sort | uniq -d;
 # done
 
+# 20181030: malloc_domain(9) KPI change
+OLD_FILES+=share/man/man9/malloc_domain.9.gz
+# 20181026: joy(4) removal
+OLD_FILES+=usr/share/man/man4/joy.4.gz
+# 20181025: OpenSSL libraries version bump to avoid conflict with ports
+OLD_LIBS+=lib/libcrypto.so.9
+OLD_LIBS+=usr/lib/libssl.so.9
+OLD_LIBS+=usr/lib32/libcrypto.so.9
+OLD_LIBS+=usr/lib32/libssl.so.9
+# 20181021: mse(4) removal
+OLD_FILES+=usr/share/man/man4/mse.4.gz
+# 20181015: Stale libcasper(3) files following r329452
+OLD_LIBS+=lib/casper/libcap_sysctl.so.0
+OLD_LIBS+=lib/casper/libcap_grp.so.0
+OLD_LIBS+=lib/casper/libcap_pwd.so.0
+OLD_LIBS+=lib/casper/libcap_random.so.0
+OLD_LIBS+=lib/casper/libcap_dns.so.0
+OLD_LIBS+=lib/casper/libcap_syslog.so.0
+OLD_LIBS+=usr/lib32/libcap_sysctl.so.0
+OLD_LIBS+=usr/lib32/libcap_grp.so.0
+OLD_LIBS+=usr/lib32/libcap_pwd.so.0
+OLD_LIBS+=usr/lib32/libcap_random.so.0
+OLD_LIBS+=usr/lib32/libcap_dns.so.0
+OLD_LIBS+=usr/lib32/libcap_syslog.so.0
 # 20181009: OpenSSL 1.1.1
 OLD_FILES+=usr/include/openssl/des_old.h
 OLD_FILES+=usr/include/openssl/dso.h
@@ -4856,9 +4880,7 @@ OLD_FILES+=usr/include/openssl/bio_lcl.h
 OLD_FILES+=usr/include/openssl/e_os.h
 OLD_FILES+=usr/include/openssl/fips.h
 OLD_FILES+=usr/include/openssl/fips_rand.h
-OLD_FILES+=usr/include/openssl/md2.h
 OLD_FILES+=usr/include/openssl/pq_compat.h
-OLD_FILES+=usr/include/openssl/store.h
 OLD_FILES+=usr/include/openssl/tmdiff.h
 OLD_FILES+=usr/include/openssl/ui_locl.h
 OLD_FILES+=usr/share/openssl/man/man3/CRYPTO_set_id_callback.3.gz
