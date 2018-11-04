@@ -1,13 +1,8 @@
+# $FreeBSD$
 
 . $(atf_get_srcdir)/utils.subr
 
 atf_test_case "frag6" "cleanup"
-
-frag6_head()
-{
-	atf_set descr 'regress/frag6/frag6.py'
-	atf_set require.user root
-}
 
 frag6_body()
 {
@@ -22,12 +17,6 @@ frag6_cleanup()
 
 atf_test_case "frag6_ext" "cleanup"
 
-frag6_ext_head()
-{
-	atf_set descr 'regress/frag6/frag6_ext.py'
-	atf_set require.user root
-}
-
 frag6_ext_body()
 {
 	v6_init
@@ -40,12 +29,6 @@ frag6_ext_cleanup()
 }
 
 atf_test_case "frag6_hop" "cleanup"
-
-frag6_hop_head()
-{
-	atf_set descr 'regress/frag6/frag6_hop.py'
-	atf_set require.user root
-}
 
 frag6_hop_body()
 {
@@ -60,12 +43,6 @@ frag6_hop_cleanup()
 
 atf_test_case "frag6_maxlen" "cleanup"
 
-frag6_maxlen_head()
-{
-	atf_set descr 'regress/frag6/frag6_maxlen.py'
-	atf_set require.user root
-}
-
 frag6_maxlen_body()
 {
 	v6_init
@@ -75,15 +52,9 @@ frag6_maxlen_body()
 frag6_maxlen_cleanup()
 {
 	v6_cleanup
-} 
+}
 
 atf_test_case "frag6_mf0atomic" "cleanup"
-
-frag6_mf0atomic_head()
-{
-	atf_set descr 'regress/frag6/frag6_mf0atomic.py'
-	atf_set require.user root
-}
 
 frag6_mf0atomic_body()
 {
@@ -94,15 +65,9 @@ frag6_mf0atomic_body()
 frag6_mf0atomic_cleanup()
 {
 	v6_cleanup
-} 
+}
 
 atf_test_case "frag6_mf0long" "cleanup"
-
-frag6_mf0long_head()
-{
-	atf_set descr 'regress/frag6/frag6_mf0long.py'
-	atf_set require.user root
-}
 
 frag6_mf0long_body()
 {
@@ -113,15 +78,9 @@ frag6_mf0long_body()
 frag6_mf0long_cleanup()
 {
 	v6_cleanup
-} 
+}
 
 atf_test_case "frag6_mf0middle" "cleanup"
-
-frag6_mf0middle_head()
-{
-	atf_set descr 'regress/frag6/frag6_mf0middle.py'
-	atf_set require.user root
-}
 
 frag6_mf0middle_body()
 {
@@ -132,15 +91,9 @@ frag6_mf0middle_body()
 frag6_mf0middle_cleanup()
 {
 	v6_cleanup
-} 
+}
 
 atf_test_case "frag6_mf0short" "cleanup"
-
-frag6_mf0short_head()
-{
-	atf_set descr 'regress/frag6/frag6_mf0short.py'
-	atf_set require.user root
-}
 
 frag6_mf0short_body()
 {
@@ -151,15 +104,9 @@ frag6_mf0short_body()
 frag6_mf0short_cleanup()
 {
 	v6_cleanup
-} 
+}
 
 atf_test_case "frag6_mf1end" "cleanup"
-
-frag6_mf1end_head()
-{
-	atf_set descr 'regress/frag6/frag6_mf1end.py'
-	atf_set require.user root
-}
 
 frag6_mf1end_body()
 {
@@ -170,15 +117,9 @@ frag6_mf1end_body()
 frag6_mf1end_cleanup()
 {
 	v6_cleanup
-} 
+}
 
 atf_test_case "frag6_opt" "cleanup"
-
-frag6_opt_head()
-{
-	atf_set descr 'regress/frag6/frag6_opt.py'
-	atf_set require.user root
-}
 
 frag6_opt_body()
 {
@@ -189,15 +130,9 @@ frag6_opt_body()
 frag6_opt_cleanup()
 {
 	v6_cleanup
-} 
+}
 
 atf_test_case "frag6_overatomic" "cleanup"
-
-frag6_overatomic_head()
-{
-	atf_set descr 'regress/frag6/frag6_overatomic.py'
-	atf_set require.user root
-}
 
 frag6_overatomic_body()
 {
@@ -208,15 +143,9 @@ frag6_overatomic_body()
 frag6_overatomic_cleanup()
 {
 	v6_cleanup
-} 
+}
 
 atf_test_case "frag6_overdrop" "cleanup"
-
-frag6_overdrop_head()
-{
-	atf_set descr 'regress/frag6/frag6_overdrop.py'
-	atf_set require.user root
-}
 
 frag6_overdrop_body()
 {
@@ -227,15 +156,9 @@ frag6_overdrop_body()
 frag6_overdrop_cleanup()
 {
 	v6_cleanup
-} 
+}
 
 atf_test_case "frag6_overhead" "cleanup"
-
-frag6_overhead_head()
-{
-	atf_set descr 'regress/frag6/frag6_overhead.py'
-	atf_set require.user root
-}
 
 frag6_overhead_body()
 {
@@ -246,15 +169,9 @@ frag6_overhead_body()
 frag6_overhead_cleanup()
 {
 	v6_cleanup
-} 
+}
 
 atf_test_case "frag6_overhead0" "cleanup"
-
-frag6_overhead0_head()
-{
-	atf_set descr 'regress/frag6/frag6_overhead0.py'
-	atf_set require.user root
-}
 
 frag6_overhead0_body()
 {
@@ -265,15 +182,9 @@ frag6_overhead0_body()
 frag6_overhead0_cleanup()
 {
 	v6_cleanup
-} 
+}
 
 atf_test_case "frag6_overhead1" "cleanup"
-
-frag6_overhead1_head()
-{
-	atf_set descr 'regress/frag6/frag6_overhead1.py'
-	atf_set require.user root
-}
 
 frag6_overhead1_body()
 {
@@ -284,15 +195,9 @@ frag6_overhead1_body()
 frag6_overhead1_cleanup()
 {
 	v6_cleanup
-} 
+}
 
 atf_test_case "frag6_overtail" "cleanup"
-
-frag6_overtail_head()
-{
-	atf_set descr 'regress/frag6/frag6_overtail.py'
-	atf_set require.user root
-}
 
 frag6_overtail_body()
 {
@@ -303,15 +208,9 @@ frag6_overtail_body()
 frag6_overtail_cleanup()
 {
 	v6_cleanup
-} 
+}
 
 atf_test_case "frag6_overtail0" "cleanup"
-
-frag6_overtail0_head()
-{
-	atf_set descr 'regress/frag6/frag6_overtail0.py'
-	atf_set require.user root
-}
 
 frag6_overtail0_body()
 {
@@ -322,15 +221,9 @@ frag6_overtail0_body()
 frag6_overtail0_cleanup()
 {
 	v6_cleanup
-} 
+}
 
 atf_test_case "frag6_overtail1" "cleanup"
-
-frag6_overtail1_head()
-{
-	atf_set descr 'regress/frag6/frag6_overtail1.py'
-	atf_set require.user root
-}
 
 frag6_overtail1_body()
 {
@@ -341,15 +234,9 @@ frag6_overtail1_body()
 frag6_overtail1_cleanup()
 {
 	v6_cleanup
-} 
+}
 
 atf_test_case "frag6_padding" "cleanup"
-
-frag6_padding_head()
-{
-	atf_set descr 'regress/frag6/frag6_padding.py'
-	atf_set require.user root
-}
 
 frag6_padding_body()
 {
@@ -360,15 +247,9 @@ frag6_padding_body()
 frag6_padding_cleanup()
 {
 	v6_cleanup
-} 
+}
 
 atf_test_case "frag6_permute" "cleanup"
-
-frag6_permute_head()
-{
-	atf_set descr 'regress/frag6/frag6_permute.py'
-	atf_set require.user root
-}
 
 frag6_permute_body()
 {
@@ -379,15 +260,9 @@ frag6_permute_body()
 frag6_permute_cleanup()
 {
 	v6_cleanup
-} 
+}
 
 atf_test_case "frag6_queuelimit" "cleanup"
-
-frag6_queuelimit_head()
-{
-	atf_set descr 'regress/frag6/frag6_queuelimit.py'
-	atf_set require.user root
-}
 
 frag6_queuelimit_body()
 {
@@ -398,15 +273,9 @@ frag6_queuelimit_body()
 frag6_queuelimit_cleanup()
 {
 	v6_cleanup
-} 
+}
 
 atf_test_case "frag6_refrag" "cleanup"
-
-frag6_refrag_head()
-{
-	atf_set descr 'regress/frag6/frag6_refrag.py'
-	atf_set require.user root
-}
 
 frag6_refrag_body()
 {
@@ -417,15 +286,9 @@ frag6_refrag_body()
 frag6_refrag_cleanup()
 {
 	v6_cleanup
-} 
+}
 
 atf_test_case "frag6_shortatomic" "cleanup"
-
-frag6_shortatomic_head()
-{
-	atf_set descr 'regress/frag6/frag6_shortatomic.py'
-	atf_set require.user root
-}
 
 frag6_shortatomic_body()
 {
@@ -436,15 +299,9 @@ frag6_shortatomic_body()
 frag6_shortatomic_cleanup()
 {
 	v6_cleanup
-} 
+}
 
 atf_test_case "frag6_timeout" "cleanup"
-
-frag6_timeout_head()
-{
-	atf_set descr 'regress/frag6/frag6_timeout.py'
-	atf_set require.user root
-}
 
 frag6_timeout_body()
 {
@@ -455,15 +312,9 @@ frag6_timeout_body()
 frag6_timeout_cleanup()
 {
 	v6_cleanup
-} 
+}
 
 atf_test_case "frag6_udpatomic" "cleanup"
-
-frag6_udpatomic_head()
-{
-	atf_set descr 'regress/frag6/frag6_udpatomic.py'
-	atf_set require.user root
-}
 
 frag6_udpatomic_body()
 {
@@ -474,15 +325,9 @@ frag6_udpatomic_body()
 frag6_udpatomic_cleanup()
 {
 	v6_cleanup
-} 
+}
 
 atf_test_case "frag6_udpheader" "cleanup"
-
-frag6_udpheader_head()
-{
-	atf_set descr 'regress/frag6/frag6_udpheader.py'
-	atf_set require.user root
-}
 
 frag6_udpheader_body()
 {
@@ -493,15 +338,9 @@ frag6_udpheader_body()
 frag6_udpheader_cleanup()
 {
 	v6_cleanup
-} 
+}
 
 atf_test_case "frag6_udppayload" "cleanup"
-
-frag6_udppayload_head()
-{
-	atf_set descr 'regress/frag6/frag6_udppayload.py'
-	atf_set require.user root
-}
 
 frag6_udppayload_body()
 {
@@ -512,15 +351,9 @@ frag6_udppayload_body()
 frag6_udppayload_cleanup()
 {
 	v6_cleanup
-} 
+}
 
 atf_test_case "frag6_zerofirst" "cleanup"
-
-frag6_zerofirst_head()
-{
-	atf_set descr 'regress/frag6/frag6_zerofirst.py'
-	atf_set require.user root
-}
 
 frag6_zerofirst_body()
 {
@@ -531,15 +364,9 @@ frag6_zerofirst_body()
 frag6_zerofirst_cleanup()
 {
 	v6_cleanup
-} 
+}
 
 atf_test_case "frag6_zerosecond" "cleanup"
-
-frag6_zerosecond_head()
-{
-	atf_set descr 'regress/frag6/frag6_zerosecond.py'
-	atf_set require.user root
-}
 
 frag6_zerosecond_body()
 {
@@ -550,8 +377,8 @@ frag6_zerosecond_body()
 frag6_zerosecond_cleanup()
 {
 	v6_cleanup
-} 
- 
+}
+
 atf_init_test_cases()
 {
 	atf_add_test_case "frag6"
