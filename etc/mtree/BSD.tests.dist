@@ -755,11 +755,7 @@
         netinet
         ..
         netinet6
-            ipv6
-                regress
-                    frag6
-                    ..
-                ..
+            frag6
             ..
         ..
         netipsec

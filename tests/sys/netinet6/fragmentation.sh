@@ -1,5 +1,3 @@
-#! /usr/libexec/atf-sh
-# $FreeBSD$
 
 . $(atf_get_srcdir)/utils.subr
 
