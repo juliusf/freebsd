@@ -18,14 +18,16 @@ v6_mkepair()
 
 v6_mktarget()
 {
-        LOCAL="$1/64"
-	REMOTE="$2/64"
+	jailname="$1"
+	jailname=$(echo $jailname | sed 's/\./_/g')  #remove dot from jail name
+	LOCAL="$2/64"
+	REMOTE="$3/64"
 	epair=$(v6_mkepair)
-	v6_mkjail jail1 ${epair}a
- 	ifconfig ${epair}b inet6 ${LOCAL} no_dad up
-	jexec jail1 ifconfig ${epair}a inet6 ${REMOTE} no_dad up
-        LOCAL_MAC="$(ifconfig ${epair}b | grep ether | awk '{ print $2}')"
-	REMOTE_MAC="$(jexec jail1 ifconfig ${epair}a | grep ether | awk '{ print $2}')"
+	v6_mkjail $jailname ${epair}a
+	ifconfig ${epair}b inet6 ${LOCAL} no_dad up
+	jexec $jailname ifconfig ${epair}a inet6 ${REMOTE} no_dad up
+	LOCAL_MAC="$(ifconfig ${epair}b | grep ether | awk '{ print $2}')"
+	REMOTE_MAC="$(jexec $jailname ifconfig ${epair}a | grep ether | awk '{ print $2}')"
 	LOCAL_IF="${epair}b"
 }
 
@@ -47,8 +49,8 @@ v6_mkjail()
 v6_runscapytest()
 {
 	BASE_FOLDER=$1
-        TEST_SCRIPT=$2
-        LOCAL_IF=$3
+	TEST_SCRIPT=$2
+	LOCAL_IF=$3
 	LOCAL_MAC=$4
 	REMOTE_MAC=$5
 	LOCAL_ADDR6=$6
@@ -57,14 +59,14 @@ v6_runscapytest()
 
 	ADDR_FILE=addr.py
 
-        echo "LOCAL_IF = '${LOCAL_IF}'" >> $ADDR_FILE
-        echo "LOCAL_MAC = '${LOCAL_MAC}'" >> $ADDR_FILE
-        echo "REMOTE_MAC = '${REMOTE_MAC}'" >> $ADDR_FILE
-        echo "LOCAL_ADDR6 = '${LOCAL_ADDR6}'" >> $ADDR_FILE
-        echo "REMOTE_ADDR6 = '${REMOTE_ADDR6}'" >> $ADDR_FILE
+	echo "LOCAL_IF = '${LOCAL_IF}'" >> $ADDR_FILE
+	echo "LOCAL_MAC = '${LOCAL_MAC}'" >> $ADDR_FILE
+	echo "REMOTE_MAC = '${REMOTE_MAC}'" >> $ADDR_FILE
+	echo "LOCAL_ADDR6 = '${LOCAL_ADDR6}'" >> $ADDR_FILE
+	echo "REMOTE_ADDR6 = '${REMOTE_ADDR6}'" >> $ADDR_FILE
 
 	cp $(atf_get_srcdir)/$TEST_SCRIPT .
-        atf_check -s exit:0 -o ignore python2.7 $TEST_SCRIPT
+	atf_check -s exit:0 -o ignore python2.7 $TEST_SCRIPT
 
 	}
 
@@ -73,8 +75,8 @@ v6_scapytest()
 	BASE_FOLDER=$1
 	TEST_SCRIPT=$2
 	LOCAL_ADDR6="2001:db8:42::1"
-        REMOTE_ADDR6="2001:db8:42::2"
-        v6_mktarget $LOCAL_ADDR6 $REMOTE_ADDR6
+	REMOTE_ADDR6="2001:db8:42::2"
+	v6_mktarget $TEST_SCRIPT $LOCAL_ADDR6 $REMOTE_ADDR6
 
 	v6_runscapytest $BASE_FOLDER $TEST_SCRIPT $LOCAL_IF $LOCAL_MAC $REMOTE_MAC $LOCAL_ADDR6 $REMOTE_ADDR6
 }

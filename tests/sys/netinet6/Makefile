@@ -6,6 +6,7 @@ TESTSDIR=       ${TESTSBASE}/sys/netinet6
 ATF_TESTS_SH+=	fragmentation
 TEST_METADATA.fragmentation+= required_programs="python2.7 scapy"
 TEST_METADATA.fragmentation+= required_user="root"
+TEST_METADATA+= is_exclusive=true
 
 ${PACKAGE}FILES+=	utils.subr \
 			frag6/frag6_overhead0.py \
