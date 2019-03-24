@@ -180,13 +180,13 @@ struct socket {
 /*
  * Socket state bits.
  *
- * Historically, this bits were all kept in the so_state field.  For
- * locking reasons, they are now in multiple fields, as they are
- * locked differently.  so_state maintains basic socket state protected
- * by the socket lock.  so_qstate holds information about the socket
- * accept queues.  Each socket buffer also has a state field holding
- * information relevant to that socket buffer (can't send, rcv).  Many
- * fields will be read without locks to improve performance and avoid
+ * Historically, these bits were all kept in the so_state field.
+ * They are now split into separate, lock-specific fields.
+ * so_state maintains basic socket state protected by the socket lock.
+ * so_qstate holds information about the socket accept queues.
+ * Each socket buffer also has a state field holding information
+ * relevant to that socket buffer (can't send, rcv).
+ * Many fields will be read without locks to improve performance and avoid
  * lock order issues.  However, this approach must be used with caution.
  */
 #define	SS_NOFDREF		0x0001	/* no file table ref any more */
@@ -379,7 +379,8 @@ struct uio;
 /*
  * From uipc_socket and friends
  */
-int	getsockaddr(struct sockaddr **namp, caddr_t uaddr, size_t len);
+int	getsockaddr(struct sockaddr **namp, const struct sockaddr *uaddr,
+	    size_t len);
 int	getsock_cap(struct thread *td, int fd, cap_rights_t *rightsp,
 	    struct file **fpp, u_int *fflagp, struct filecaps *havecaps);
 void	soabort(struct socket *so);

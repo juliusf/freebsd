@@ -106,6 +106,9 @@ __FBSDID("$FreeBSD$");
 
 #include <machine/cpu.h>
 #include <machine/elf.h>
+#ifdef __amd64__
+#include <machine/md_var.h>
+#endif
 
 #include <security/audit/audit.h>
 
@@ -337,7 +340,6 @@ freebsd32_exec_copyin_args(struct image_args *args, const char *fname,
 {
 	char *argp, *envp;
 	u_int32_t *p32, arg;
-	size_t length;
 	int error;
 
 	bzero(args, sizeof(*args));
@@ -355,19 +357,9 @@ freebsd32_exec_copyin_args(struct image_args *args, const char *fname,
 	/*
 	 * Copy the file name.
 	 */
-	if (fname != NULL) {
-		args->fname = args->buf;
-		error = (segflg == UIO_SYSSPACE) ?
-		    copystr(fname, args->fname, PATH_MAX, &length) :
-		    copyinstr(fname, args->fname, PATH_MAX, &length);
-		if (error != 0)
-			goto err_exit;
-	} else
-		length = 0;
-
-	args->begin_argv = args->buf + length;
-	args->endp = args->begin_argv;
-	args->stringspace = ARG_MAX;
+	error = exec_args_add_fname(args, fname, segflg);
+	if (error != 0)
+		goto err_exit;
 
 	/*
 	 * extract arguments first
@@ -380,19 +372,11 @@ freebsd32_exec_copyin_args(struct image_args *args, const char *fname,
 		if (arg == 0)
 			break;
 		argp = PTRIN(arg);
-		error = copyinstr(argp, args->endp, args->stringspace, &length);
-		if (error) {
-			if (error == ENAMETOOLONG)
-				error = E2BIG;
+		error = exec_args_add_arg(args, argp, UIO_USERSPACE);
+		if (error != 0)
 			goto err_exit;
-		}
-		args->stringspace -= length;
-		args->endp += length;
-		args->argc++;
 	}
 			
-	args->begin_envv = args->endp;
-
 	/*
 	 * extract environment strings
 	 */
@@ -405,16 +389,9 @@ freebsd32_exec_copyin_args(struct image_args *args, const char *fname,
 			if (arg == 0)
 				break;
 			envp = PTRIN(arg);
-			error = copyinstr(envp, args->endp, args->stringspace,
-			    &length);
-			if (error) {
-				if (error == ENAMETOOLONG)
-					error = E2BIG;
+			error = exec_args_add_env(args, envp, UIO_USERSPACE);
+			if (error != 0)
 				goto err_exit;
-			}
-			args->stringspace -= length;
-			args->endp += length;
-			args->envc++;
 		}
 	}
 
@@ -463,25 +440,14 @@ freebsd32_fexecve(struct thread *td, struct freebsd32_fexecve_args *uap)
 	return (error);
 }
 
-#if defined(COMPAT_FREEBSD11)
-int
-freebsd11_freebsd32_mknod(struct thread *td,
-    struct freebsd11_freebsd32_mknod_args *uap)
-{
-
-	return (kern_mknodat(td, AT_FDCWD, uap->path, UIO_USERSPACE, uap->mode,
-	    uap->dev));
-}
 
 int
-freebsd11_freebsd32_mknodat(struct thread *td,
-    struct freebsd11_freebsd32_mknodat_args *uap)
+freebsd32_mknodat(struct thread *td, struct freebsd32_mknodat_args *uap)
 {
 
-	return (kern_mknodat(td, uap->fd, uap->path, UIO_USERSPACE, uap->mode,
-	    uap->dev));
+	return (kern_mknodat(td, uap->fd, uap->path, UIO_USERSPACE,
+	    uap->mode, PAIR32TO64(dev_t, uap->dev)));
 }
-#endif /* COMPAT_FREEBSD11 */
 
 int
 freebsd32_mprotect(struct thread *td, struct freebsd32_mprotect_args *uap)
@@ -868,8 +834,8 @@ freebsd32_gettimeofday(struct thread *td,
 		error = copyout(&atv32, uap->tp, sizeof (atv32));
 	}
 	if (error == 0 && uap->tzp != NULL) {
-		rtz.tz_minuteswest = tz_minuteswest;
-		rtz.tz_dsttime = tz_dsttime;
+		rtz.tz_minuteswest = 0;
+		rtz.tz_dsttime = 0;
 		error = copyout(&rtz, uap->tzp, sizeof (rtz));
 	}
 	return (error);
@@ -2260,7 +2226,7 @@ freebsd11_freebsd32_fhstat(struct thread *td,
 #endif
 
 int
-freebsd32_sysctl(struct thread *td, struct freebsd32_sysctl_args *uap)
+freebsd32___sysctl(struct thread *td, struct freebsd32___sysctl_args *uap)
 {
 	int error, name[CTL_MAXNAME];
 	size_t j, oldlen;
@@ -3361,7 +3327,12 @@ freebsd32_procctl(struct thread *td, struct freebsd32_procctl_args *uap)
 	} x32;
 	int error, error1, flags, signum;
 
+	if (uap->com >= PROC_PROCCTL_MD_MIN)
+		return (cpu_procctl(td, uap->idtype, PAIR32TO64(id_t, uap->id),
+		    uap->com, PTRIN(uap->data)));
+
 	switch (uap->com) {
+	case PROC_ASLR_CTL:
 	case PROC_SPROTECT:
 	case PROC_TRACE_CTL:
 	case PROC_TRAPCAP_CTL:
@@ -3393,6 +3364,7 @@ freebsd32_procctl(struct thread *td, struct freebsd32_procctl_args *uap)
 			return (error);
 		data = &x.rk;
 		break;
+	case PROC_ASLR_STATUS:
 	case PROC_TRACE_STATUS:
 	case PROC_TRAPCAP_STATUS:
 		data = &flags;
@@ -3421,6 +3393,7 @@ freebsd32_procctl(struct thread *td, struct freebsd32_procctl_args *uap)
 		if (error == 0)
 			error = error1;
 		break;
+	case PROC_ASLR_STATUS:
 	case PROC_TRACE_STATUS:
 	case PROC_TRAPCAP_STATUS:
 		if (error == 0)

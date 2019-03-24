@@ -84,7 +84,7 @@ struct mtx fuse_mtx;
 extern struct vfsops fuse_vfsops;
 extern struct cdevsw fuse_cdevsw;
 extern struct vop_vector fuse_vnops;
-extern int fuse_pbuf_freecnt;
+extern uma_zone_t fuse_pbuf_zone;
 
 static struct vfsconf fuse_vfsconf = {
 	.vfc_version = VFS_VERSION,
@@ -94,9 +94,9 @@ static struct vfsconf fuse_vfsconf = {
 	.vfc_flags = VFCF_JAIL | VFCF_SYNTHETIC
 };
 
-SYSCTL_INT(_vfs_fuse, OID_AUTO, kernelabi_major, CTLFLAG_RD,
+SYSCTL_INT(_vfs_fusefs, OID_AUTO, kernelabi_major, CTLFLAG_RD,
     SYSCTL_NULL_INT_PTR, FUSE_KERNEL_VERSION, "FUSE kernel abi major version");
-SYSCTL_INT(_vfs_fuse, OID_AUTO, kernelabi_minor, CTLFLAG_RD,
+SYSCTL_INT(_vfs_fusefs, OID_AUTO, kernelabi_minor, CTLFLAG_RD,
     SYSCTL_NULL_INT_PTR, FUSE_KERNEL_MINOR_VERSION, "FUSE kernel abi minor version");
 
 /******************************
@@ -122,7 +122,6 @@ fuse_loader(struct module *m, int what, void *arg)
 
 	switch (what) {
 	case MOD_LOAD:			/* kldload */
-		fuse_pbuf_freecnt = nswbuf / 2 + 1;
 		mtx_init(&fuse_mtx, "fuse_mtx", NULL, MTX_DEF);
 		err = fuse_device_init();
 		if (err) {
@@ -130,6 +129,7 @@ fuse_loader(struct module *m, int what, void *arg)
 			return (err);
 		}
 		fuse_ipc_init();
+		fuse_pbuf_zone = pbuf_zsecond_create("fusepbuf", nswbuf / 2);
 
 		/* vfs_modevent ignores its first arg */
 		if ((err = vfs_modevent(NULL, what, &fuse_vfsconf)))
@@ -144,6 +144,7 @@ fuse_loader(struct module *m, int what, void *arg)
 		if ((err = vfs_modevent(NULL, what, &fuse_vfsconf)))
 			return (err);
 		fuse_bringdown(eh_tag);
+		uma_zdestroy(fuse_pbuf_zone);
 		break;
 	default:
 		return (EINVAL);
@@ -155,10 +156,10 @@ fuse_loader(struct module *m, int what, void *arg)
 /* Registering the module */
 
 static moduledata_t fuse_moddata = {
-	"fuse",
+	"fusefs",
 	fuse_loader,
 	&fuse_vfsconf
 };
 
-DECLARE_MODULE(fuse, fuse_moddata, SI_SUB_VFS, SI_ORDER_MIDDLE);
-MODULE_VERSION(fuse, 1);
+DECLARE_MODULE(fusefs, fuse_moddata, SI_SUB_VFS, SI_ORDER_MIDDLE);
+MODULE_VERSION(fusefs, 1);

@@ -1193,8 +1193,7 @@ nvpair_create_stringv(const char *name, const char *valuefmt, va_list valueap)
 	if (len < 0)
 		return (NULL);
 	nvp = nvpair_create_string(name, str);
-	if (nvp == NULL)
-		nv_free(str);
+	nv_free(str);
 	return (nvp);
 }
 
@@ -1275,11 +1274,6 @@ nvpair_t *
 nvpair_create_descriptor(const char *name, int value)
 {
 	nvpair_t *nvp;
-
-	if (value < 0 || !fd_is_valid(value)) {
-		ERRNO_SET(EBADF);
-		return (NULL);
-	}
 
 	value = fcntl(value, F_DUPFD_CLOEXEC, 0);
 	if (value < 0)
@@ -1517,11 +1511,6 @@ nvpair_create_descriptor_array(const char *name, const int *value,
 		if (value[ii] == -1) {
 			fds[ii] = -1;
 		} else {
-			if (!fd_is_valid(value[ii])) {
-				ERRNO_SET(EBADF);
-				goto fail;
-			}
-
 			fds[ii] = fcntl(value[ii], F_DUPFD_CLOEXEC, 0);
 			if (fds[ii] == -1)
 				goto fail;
@@ -2035,10 +2024,6 @@ nvpair_append_descriptor_array(nvpair_t *nvp, const int value)
 
 	NVPAIR_ASSERT(nvp);
 	PJDLOG_ASSERT(nvp->nvp_type == NV_TYPE_DESCRIPTOR_ARRAY);
-	if (value < 0 || !fd_is_valid(value)) {
-		ERRNO_SET(EBADF);
-		return -1;
-	}
 	fd = fcntl(value, F_DUPFD_CLOEXEC, 0);
 	if (fd == -1) {
 		return (-1);
@@ -2068,6 +2053,7 @@ nvpair_free(nvpair_t *nvp)
 	case NV_TYPE_DESCRIPTOR_ARRAY:
 		for (i = 0; i < nvp->nvp_nitems; i++)
 			close(((int *)(intptr_t)nvp->nvp_data)[i]);
+		nv_free((int *)(intptr_t)nvp->nvp_data);
 		break;
 #endif
 	case NV_TYPE_NVLIST:

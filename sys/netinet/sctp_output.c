@@ -3733,6 +3733,7 @@ sctp_process_cmsgs_for_init(struct sctp_tcb *stcb, struct mbuf *control, int *er
 	return (0);
 }
 
+#if defined(INET) || defined(INET6)
 static struct sctp_tcb *
 sctp_findassociation_cmsgs(struct sctp_inpcb **inp_p,
     uint16_t port,
@@ -3822,6 +3823,7 @@ sctp_findassociation_cmsgs(struct sctp_inpcb **inp_p,
 	}
 	return (NULL);
 }
+#endif
 
 static struct mbuf *
 sctp_add_cookie(struct mbuf *init, int init_offset,
@@ -4287,10 +4289,12 @@ sctp_lowlevel_chunk_output(struct sctp_inpcb *inp,
 						if (net->port) {
 							mtu -= sizeof(struct udphdr);
 						}
-						if ((stcb != NULL) && (stcb->asoc.smallest_mtu > mtu)) {
-							sctp_mtu_size_reset(inp, &stcb->asoc, mtu);
+						if (mtu < net->mtu) {
+							if ((stcb != NULL) && (stcb->asoc.smallest_mtu > mtu)) {
+								sctp_mtu_size_reset(inp, &stcb->asoc, mtu);
+							}
+							net->mtu = mtu;
 						}
-						net->mtu = mtu;
 					}
 				} else if (ro->ro_rt == NULL) {
 					/* route was freed */
@@ -4645,10 +4649,12 @@ sctp_lowlevel_chunk_output(struct sctp_inpcb *inp,
 						if (net->port) {
 							mtu -= sizeof(struct udphdr);
 						}
-						if ((stcb != NULL) && (stcb->asoc.smallest_mtu > mtu)) {
-							sctp_mtu_size_reset(inp, &stcb->asoc, mtu);
+						if (mtu < net->mtu) {
+							if ((stcb != NULL) && (stcb->asoc.smallest_mtu > mtu)) {
+								sctp_mtu_size_reset(inp, &stcb->asoc, mtu);
+							}
+							net->mtu = mtu;
 						}
-						net->mtu = mtu;
 					}
 				} else if (ifp) {
 					if (ND_IFINFO(ifp)->linkmtu &&
@@ -6798,6 +6804,10 @@ sctp_sendall_completes(void *ptr, uint32_t val SCTP_UNUSED)
 	 */
 
 	/* now free everything */
+	if (ca->inp) {
+		/* Lets clear the flag to allow others to run. */
+		ca->inp->sctp_flags &= ~SCTP_PCB_FLAGS_SND_ITERATOR_UP;
+	}
 	sctp_m_freem(ca->m);
 	SCTP_FREE(ca, SCTP_M_COPYAL);
 }
@@ -6851,6 +6861,14 @@ sctp_sendall(struct sctp_inpcb *inp, struct uio *uio, struct mbuf *m,
 	int ret;
 	struct sctp_copy_all *ca;
 
+	if (inp->sctp_flags & SCTP_PCB_FLAGS_SND_ITERATOR_UP) {
+		/* There is another. */
+		return (EBUSY);
+	}
+	if (uio->uio_resid > SCTP_MAX_SENDALL_LIMIT) {
+		/* You must be less than the max! */
+		return (EMSGSIZE);
+	}
 	SCTP_MALLOC(ca, struct sctp_copy_all *, sizeof(struct sctp_copy_all),
 	    SCTP_M_COPYAL);
 	if (ca == NULL) {
@@ -6887,6 +6905,7 @@ sctp_sendall(struct sctp_inpcb *inp, struct uio *uio, struct mbuf *m,
 			ca->sndlen += SCTP_BUF_LEN(mat);
 		}
 	}
+	inp->sctp_flags |= SCTP_PCB_FLAGS_SND_ITERATOR_UP;
 	ret = sctp_initiate_iterator(NULL, sctp_sendall_iterator, NULL,
 	    SCTP_PCB_ANY_FLAGS, SCTP_PCB_ANY_FEATURES,
 	    SCTP_ASOC_ANY_STATE,
@@ -12699,9 +12718,11 @@ sctp_lower_sosend(struct socket *so,
 		SCTP_INP_WUNLOCK(inp);
 		/* With the lock applied look again */
 		stcb = sctp_findassociation_ep_addr(&t_inp, addr, &net, NULL, NULL);
+#if defined(INET) || defined(INET6)
 		if ((stcb == NULL) && (control != NULL) && (port > 0)) {
 			stcb = sctp_findassociation_cmsgs(&t_inp, port, control, &net, &error);
 		}
+#endif
 		if (stcb == NULL) {
 			SCTP_INP_WLOCK(inp);
 			SCTP_INP_DECR_REF(inp);
@@ -12832,7 +12853,7 @@ sctp_lower_sosend(struct socket *so,
 		}
 	}
 	if (SCTP_SO_IS_NBIO(so)
-	    || (flags & MSG_NBIO)
+	    || (flags & (MSG_NBIO | MSG_DONTWAIT)) != 0
 	    ) {
 		non_blocking = 1;
 	}
@@ -13018,12 +13039,7 @@ sctp_lower_sosend(struct socket *so,
 	/* Calculate the maximum we can send */
 	inqueue_bytes = stcb->asoc.total_output_queue_size - (stcb->asoc.chunks_on_out_queue * SCTP_DATA_CHUNK_OVERHEAD(stcb));
 	if (SCTP_SB_LIMIT_SND(so) > inqueue_bytes) {
-		if (non_blocking) {
-			/* we already checked for non-blocking above. */
-			max_len = sndlen;
-		} else {
-			max_len = SCTP_SB_LIMIT_SND(so) - inqueue_bytes;
-		}
+		max_len = SCTP_SB_LIMIT_SND(so) - inqueue_bytes;
 	} else {
 		max_len = 0;
 	}

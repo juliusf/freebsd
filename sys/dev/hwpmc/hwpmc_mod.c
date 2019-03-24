@@ -3512,6 +3512,7 @@ pmc_syscall_handler(struct thread *td, void *syscall_args)
 		struct pmc_classdep *pcd;
 		int cl;
 
+		memset(&gci, 0, sizeof(gci));
 		gci.pm_cputype = md->pmd_cputype;
 		gci.pm_ncpu    = pmc_cpu_max();
 		gci.pm_npmc    = md->pmd_npmc;
@@ -3661,7 +3662,7 @@ pmc_syscall_handler(struct thread *td, void *syscall_args)
 		npmc = md->pmd_npmc;
 
 		pmcinfo_size = npmc * sizeof(struct pmc_info);
-		pmcinfo = malloc(pmcinfo_size, M_PMC, M_WAITOK);
+		pmcinfo = malloc(pmcinfo_size, M_PMC, M_WAITOK | M_ZERO);
 
 		p = pmcinfo;
 
@@ -4949,8 +4950,11 @@ pmc_process_samples(int cpu, ring_type_t ring)
 
 		/* If there is a pending AST wait for completion */
 		if (ps->ps_nsamples == PMC_USER_CALLCHAIN_PENDING) {
-			/* if sample is more than 65 ms old, drop it */
-			if (ticks - ps->ps_ticks > (hz >> 4)) {
+			/* if we've been waiting more than 1 tick to 
+			 * collect a callchain for this record then
+			 * drop it and move on.
+			 */
+			if (ticks - ps->ps_ticks > 1) {
 				/*
 				 * track how often we hit this as it will
 				 * preferentially lose user samples

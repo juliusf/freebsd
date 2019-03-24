@@ -15,8 +15,6 @@ CONFS=	DAEMON \
 	addswap \
 	adjkerntz \
 	archdep \
-	auditd \
-	auditdistd \
 	bgfsck \
 	${_blacklistd} \
 	${_bluetooth} \
@@ -48,10 +46,6 @@ CONFS=	DAEMON \
 	hostname \
 	iovctl \
 	ip6addrctl \
-	ipfilter \
-	ipfs \
-	ipmon \
-	ipnat \
 	ipsec \
 	${_kadmind} \
 	${_kdc} \
@@ -164,6 +158,12 @@ APM+=		apmd
 APMPACKAGE=	apm
 .endif
 
+.if ${MK_AUDIT} != "no"
+CONFGROUPS+=	AUDIT
+AUDIT+=		auditd
+AUDIT+=		auditdistd
+.endif
+
 .if ${MK_AUTOFS} != "no"
 CONFS+=		automount
 CONFS+=		automountd
@@ -209,6 +209,14 @@ HASTPACKAGE=	hast
 
 .if ${MK_INETD} != "no"
 CONFS+=		inetd
+.endif
+
+.if ${MK_IPFILTER} != "no"
+CONFS+=	ipfilter \
+	ipfs \
+	ipmon \
+	ipnat \
+	ippool
 .endif
 
 .if ${MK_IPFW} != "no"
@@ -289,10 +297,6 @@ CONFS+=		routed
 CONFGROUPS+=	SMRCD
 SMRCD=		sendmail
 SMRCDPACKAGE=	sendmail
-.endif
-
-.if ${MK_TIMED} != "no"
-CONFS+=		timed
 .endif
 
 .if ${MK_UNBOUND} != "no"

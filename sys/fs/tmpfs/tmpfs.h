@@ -325,6 +325,11 @@ LIST_HEAD(tmpfs_node_list, tmpfs_node);
  */
 struct tmpfs_mount {
 	/*
+	 * Original value of the "size" parameter, for reference purposes,
+	 * mostly.
+	 */
+	off_t			tm_size_max;
+	/*
 	 * Maximum number of memory pages available for use by the file
 	 * system, set during mount time.  This variable must never be
 	 * used directly as it may be bigger than the current amount of
@@ -353,7 +358,7 @@ struct tmpfs_mount {
 	ino_t			tm_nodes_max;
 
 	/* unrhdr used to allocate inode numbers */
-	struct unrhdr *		tm_ino_unr;
+	struct unrhdr64		tm_ino_unr;
 
 	/* Number of nodes currently that are in use. */
 	ino_t			tm_nodes_inuse;

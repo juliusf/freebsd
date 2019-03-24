@@ -426,7 +426,9 @@ void
 cpu_halt(void)
 {
 
-	panic("cpu_halt");
+	intr_disable();
+	for (;;)
+		__asm __volatile("wfi");
 }
 
 /*
@@ -582,13 +584,14 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	fp = (struct sigframe *)STACKALIGN(fp);
 
 	/* Fill in the frame to copy out */
+	bzero(&frame, sizeof(frame));
 	get_mcontext(td, &frame.sf_uc.uc_mcontext, 0);
 	get_fpcontext(td, &frame.sf_uc.uc_mcontext);
 	frame.sf_si = ksi->ksi_info;
 	frame.sf_uc.uc_sigmask = *mask;
-	frame.sf_uc.uc_stack.ss_flags = (td->td_pflags & TDP_ALTSTACK) ?
-	    ((onstack) ? SS_ONSTACK : 0) : SS_DISABLE;
 	frame.sf_uc.uc_stack = td->td_sigstk;
+	frame.sf_uc.uc_stack.ss_flags = (td->td_pflags & TDP_ALTSTACK) != 0 ?
+	    (onstack ? SS_ONSTACK : 0) : SS_DISABLE;
 	mtx_unlock(&psp->ps_mtx);
 	PROC_UNLOCK(td->td_proc);
 
@@ -867,10 +870,6 @@ initriscv(struct riscv_bootparams *rvbp)
 	cninit();
 
 	init_proc0(rvbp->kern_stack);
-
-	/* set page table base register for thread0 */
-	thread0.td_pcb->pcb_l1addr = \
-	    (rvbp->kern_l1pt - KERNBASE + rvbp->kern_phys);
 
 	msgbufinit(msgbufp, msgbufsize);
 	mutex_init();

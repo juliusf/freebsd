@@ -86,7 +86,6 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_extern.h>
 #include <vm/vm_map.h>
 #include <vm/swap_pager.h>
-#include "opt_swap.h"
 
 static MALLOC_DEFINE(M_BIOBUF, "biobuf", "BIO buffer");
 
@@ -1017,10 +1016,6 @@ bd_speedup(void)
 	mtx_unlock(&bdlock);
 }
 
-#ifndef NSWBUF_MIN
-#define	NSWBUF_MIN	16
-#endif
-
 #ifdef __i386__
 #define	TRANSIENT_DENOM	5
 #else
@@ -1129,20 +1124,15 @@ kern_vfs_bio_buffer_alloc(caddr_t v, long physmem_est)
 			nbuf = buf_sz / BKVASIZE;
 	}
 
-	/*
-	 * swbufs are used as temporary holders for I/O, such as paging I/O.
-	 * We have no less then 16 and no more then 256.
-	 */
-	nswbuf = min(nbuf / 4, 256);
-	TUNABLE_INT_FETCH("kern.nswbuf", &nswbuf);
-	if (nswbuf < NSWBUF_MIN)
-		nswbuf = NSWBUF_MIN;
+	if (nswbuf == 0) {
+		nswbuf = min(nbuf / 4, 256);
+		if (nswbuf < NSWBUF_MIN)
+			nswbuf = NSWBUF_MIN;
+	}
 
 	/*
 	 * Reserve space for the buffer cache buffers
 	 */
-	swbuf = (void *)v;
-	v = (caddr_t)(swbuf + nswbuf);
 	buf = (void *)v;
 	v = (caddr_t)(buf + nbuf);
 
@@ -1656,7 +1646,7 @@ buf_alloc(struct bufdomain *bd)
 	if (freebufs > 0)
 		bp = uma_zalloc(buf_zone, M_NOWAIT);
 	if (bp == NULL) {
-		atomic_fetchadd_int(&bd->bd_freebuffers, 1);
+		atomic_add_int(&bd->bd_freebuffers, 1);
 		bufspace_daemon_wakeup(bd);
 		counter_u64_add(numbufallocfails, 1);
 		return (NULL);
@@ -2231,7 +2221,7 @@ bufwrite(struct buf *bp)
 	}
 
 	if (bp->b_flags & B_BARRIER)
-		barrierwrites++;
+		atomic_add_long(&barrierwrites, 1);
 
 	oldflags = bp->b_flags;
 
@@ -4852,6 +4842,8 @@ b_io_dismiss(struct buf *bp, int ioflag, bool release)
 
 	if ((ioflag & IO_DIRECT) != 0)
 		bp->b_flags |= B_DIRECT;
+	if ((ioflag & IO_EXT) != 0)
+		bp->b_xflags |= BX_ALTDATA;
 	if ((ioflag & (IO_VMIO | IO_DIRECT)) != 0 && LIST_EMPTY(&bp->b_dep)) {
 		bp->b_flags |= B_RELBUF;
 		if ((ioflag & IO_NOREUSE) != 0)
@@ -5339,16 +5331,19 @@ DB_SHOW_COMMAND(buffer, db_show_buffer)
 	}
 
 	db_printf("buf at %p\n", bp);
-	db_printf("b_flags = 0x%b, b_xflags=0x%b, b_vflags=0x%b\n",
-	    (u_int)bp->b_flags, PRINT_BUF_FLAGS, (u_int)bp->b_xflags,
-	    PRINT_BUF_XFLAGS, (u_int)bp->b_vflags, PRINT_BUF_VFLAGS);
+	db_printf("b_flags = 0x%b, b_xflags=0x%b\n",
+	    (u_int)bp->b_flags, PRINT_BUF_FLAGS,
+	    (u_int)bp->b_xflags, PRINT_BUF_XFLAGS);
+	db_printf("b_vflags=0x%b b_ioflags0x%b\n",
+	    (u_int)bp->b_vflags, PRINT_BUF_VFLAGS,
+	    (u_int)bp->b_ioflags, PRINT_BIO_FLAGS);
 	db_printf(
 	    "b_error = %d, b_bufsize = %ld, b_bcount = %ld, b_resid = %ld\n"
-	    "b_bufobj = (%p), b_data = %p, b_blkno = %jd, b_lblkno = %jd, "
-	    "b_dep = %p\n",
+	    "b_bufobj = (%p), b_data = %p\n, b_blkno = %jd, b_lblkno = %jd, "
+	    "b_vp = %p, b_dep = %p\n",
 	    bp->b_error, bp->b_bufsize, bp->b_bcount, bp->b_resid,
 	    bp->b_bufobj, bp->b_data, (intmax_t)bp->b_blkno,
-	    (intmax_t)bp->b_lblkno, bp->b_dep.lh_first);
+	    (intmax_t)bp->b_lblkno, bp->b_vp, bp->b_dep.lh_first);
 	db_printf("b_kvabase = %p, b_kvasize = %d\n",
 	    bp->b_kvabase, bp->b_kvasize);
 	if (bp->b_npages) {

@@ -482,6 +482,13 @@ vop_stdpathconf(ap)
 		case _PC_PATH_MAX:
 			*ap->a_retval = PATH_MAX;
 			return (0);
+		case _PC_ACL_EXTENDED:
+		case _PC_ACL_NFS4:
+		case _PC_CAP_PRESENT:
+		case _PC_INF_PRESENT:
+		case _PC_MAC_PRESENT:
+			*ap->a_retval = 0;
+			return (0);
 		default:
 			return (EINVAL);
 	}
@@ -1063,7 +1070,7 @@ vop_stdadvise(struct vop_advise_args *ap)
 	struct vnode *vp;
 	struct bufobj *bo;
 	daddr_t startn, endn;
-	off_t start, end;
+	off_t bstart, bend, start, end;
 	int bsize, error;
 
 	vp = ap->a_vp;
@@ -1085,14 +1092,27 @@ vop_stdadvise(struct vop_advise_args *ap)
 		}
 
 		/*
+		 * Round to block boundaries (and later possibly further to
+		 * page boundaries).  Applications cannot reasonably be aware  
+		 * of the boundaries, and the rounding must be to expand at
+		 * both extremities to cover enough.  It still doesn't cover
+		 * read-ahead.  For partial blocks, this gives unnecessary
+		 * discarding of buffers but is efficient enough since the
+		 * pages usually remain in VMIO for some time.
+		 */
+		bsize = vp->v_bufobj.bo_bsize;
+		bstart = rounddown(ap->a_start, bsize);
+		bend = roundup(ap->a_end, bsize);
+
+		/*
 		 * Deactivate pages in the specified range from the backing VM
 		 * object.  Pages that are resident in the buffer cache will
 		 * remain wired until their corresponding buffers are released
 		 * below.
 		 */
 		if (vp->v_object != NULL) {
-			start = trunc_page(ap->a_start);
-			end = round_page(ap->a_end);
+			start = trunc_page(bstart);
+			end = round_page(bend);
 			VM_OBJECT_RLOCK(vp->v_object);
 			vm_object_page_noreuse(vp->v_object, OFF_TO_IDX(start),
 			    OFF_TO_IDX(end));
@@ -1101,9 +1121,8 @@ vop_stdadvise(struct vop_advise_args *ap)
 
 		bo = &vp->v_bufobj;
 		BO_RLOCK(bo);
-		bsize = vp->v_bufobj.bo_bsize;
-		startn = ap->a_start / bsize;
-		endn = ap->a_end / bsize;
+		startn = bstart / bsize;
+		endn = bend / bsize;
 		error = bnoreuselist(&bo->bo_clean, bo, startn, endn);
 		if (error == 0)
 			error = bnoreuselist(&bo->bo_dirty, bo, startn, endn);

@@ -949,10 +949,11 @@ nfsvno_write(struct vnode *vp, off_t off, int retlen, int cnt, int *stable,
 int
 nfsvno_createsub(struct nfsrv_descript *nd, struct nameidata *ndp,
     struct vnode **vpp, struct nfsvattr *nvap, int *exclusive_flagp,
-    int32_t *cverf, NFSDEV_T rdev, struct thread *p, struct nfsexstuff *exp)
+    int32_t *cverf, NFSDEV_T rdev, struct nfsexstuff *exp)
 {
 	u_quad_t tempsize;
 	int error;
+	struct thread *p = curthread;
 
 	error = nd->nd_repstat;
 	if (!error && ndp->ni_vp == NULL) {
@@ -996,8 +997,7 @@ nfsvno_createsub(struct nfsrv_descript *nd, struct nameidata *ndp,
 			if (nvap->na_type == VCHR && rdev == 0xffffffff)
 				nvap->na_type = VFIFO;
                         if (nvap->na_type != VFIFO &&
-			    (error = priv_check_cred(nd->nd_cred,
-			     PRIV_VFS_MKNOD_DEV, 0))) {
+			    (error = priv_check_cred(nd->nd_cred, PRIV_VFS_MKNOD_DEV))) {
 				vrele(ndp->ni_startdir);
 				nfsvno_relpathbuf(ndp);
 				vput(ndp->ni_dvp);
@@ -1091,7 +1091,7 @@ nfsvno_mknod(struct nameidata *ndp, struct nfsvattr *nvap, struct ucred *cred,
 		nfsvno_relpathbuf(ndp);
 	} else {
 		if (nvap->na_type != VFIFO &&
-		    (error = priv_check_cred(cred, PRIV_VFS_MKNOD_DEV, 0))) {
+		    (error = priv_check_cred(cred, PRIV_VFS_MKNOD_DEV))) {
 			vrele(ndp->ni_startdir);
 			nfsvno_relpathbuf(ndp);
 			vput(ndp->ni_dvp);
@@ -1632,12 +1632,13 @@ void
 nfsvno_open(struct nfsrv_descript *nd, struct nameidata *ndp,
     nfsquad_t clientid, nfsv4stateid_t *stateidp, struct nfsstate *stp,
     int *exclusive_flagp, struct nfsvattr *nvap, int32_t *cverf, int create,
-    NFSACL_T *aclp, nfsattrbit_t *attrbitp, struct ucred *cred, struct thread *p,
+    NFSACL_T *aclp, nfsattrbit_t *attrbitp, struct ucred *cred,
     struct nfsexstuff *exp, struct vnode **vpp)
 {
 	struct vnode *vp = NULL;
 	u_quad_t tempsize;
 	struct nfsexstuff nes;
+	struct thread *p = curthread;
 
 	if (ndp->ni_vp == NULL)
 		nd->nd_repstat = nfsrv_opencheck(clientid,
@@ -1814,7 +1815,7 @@ nfsvno_fillattr(struct nfsrv_descript *nd, struct mount *mp, struct vnode *vp,
  */
 int
 nfsrvd_readdir(struct nfsrv_descript *nd, int isdgram,
-    struct vnode *vp, struct thread *p, struct nfsexstuff *exp)
+    struct vnode *vp, struct nfsexstuff *exp)
 {
 	struct dirent *dp;
 	u_int32_t *tl;
@@ -1828,6 +1829,7 @@ nfsrvd_readdir(struct nfsrv_descript *nd, int isdgram,
 	struct uio io;
 	struct iovec iv;
 	int is_ufs;
+	struct thread *p = curthread;
 
 	if (nd->nd_repstat) {
 		nfsrv_postopattr(nd, getret, &at);
@@ -2058,7 +2060,7 @@ nfsmout:
  */
 int
 nfsrvd_readdirplus(struct nfsrv_descript *nd, int isdgram,
-    struct vnode *vp, struct thread *p, struct nfsexstuff *exp)
+    struct vnode *vp, struct nfsexstuff *exp)
 {
 	struct dirent *dp;
 	u_int32_t *tl;
@@ -2081,6 +2083,7 @@ nfsrvd_readdirplus(struct nfsrv_descript *nd, int isdgram,
 	int at_root, is_ufs, is_zfs, needs_unbusy, supports_nfsv4acls;
 	struct mount *mp, *new_mp;
 	uint64_t mounted_on_fileno;
+	struct thread *p = curthread;
 
 	if (nd->nd_repstat) {
 		nfsrv_postopattr(nd, getret, &at);
@@ -2107,9 +2110,15 @@ nfsrvd_readdirplus(struct nfsrv_descript *nd, int isdgram,
 	 * cookie) should be in the reply. At least one client "hints" 0,
 	 * so I set it to cnt for that case. I also round it up to the
 	 * next multiple of DIRBLKSIZ.
+	 * Since the size of a Readdirplus directory entry reply will always
+	 * be greater than a directory entry returned by VOP_READDIR(), it
+	 * does not make sense to read more than NFS_SRVMAXDATA() via
+	 * VOP_READDIR().
 	 */
 	if (siz <= 0)
 		siz = cnt;
+	else if (siz > NFS_SRVMAXDATA(nd))
+		siz = NFS_SRVMAXDATA(nd);
 	siz = ((siz + DIRBLKSIZ - 1) & ~(DIRBLKSIZ - 1));
 
 	if (nd->nd_flag & ND_NFSV4) {
@@ -2782,8 +2791,8 @@ nfsv4_sattr(struct nfsrv_descript *nd, vnode_t vp, struct nfsvattr *nvap,
 				goto nfsmout;
 			}
 			if (!nd->nd_repstat) {
-				nd->nd_repstat = nfsv4_strtouid(nd, cp, j, &uid,
-				    p);
+				nd->nd_repstat = nfsv4_strtouid(nd, cp, j,
+				    &uid);
 				if (!nd->nd_repstat)
 					nvap->na_uid = uid;
 			}
@@ -2809,8 +2818,8 @@ nfsv4_sattr(struct nfsrv_descript *nd, vnode_t vp, struct nfsvattr *nvap,
 				goto nfsmout;
 			}
 			if (!nd->nd_repstat) {
-				nd->nd_repstat = nfsv4_strtogid(nd, cp, j, &gid,
-				    p);
+				nd->nd_repstat = nfsv4_strtogid(nd, cp, j,
+				    &gid);
 				if (!nd->nd_repstat)
 					nvap->na_gid = gid;
 			}
@@ -3034,7 +3043,7 @@ nfsvno_fhtovp(struct mount *mp, fhandle_t *fhp, struct sockaddr *nam,
 void
 nfsd_fhtovp(struct nfsrv_descript *nd, struct nfsrvfh *nfp, int lktype,
     struct vnode **vpp, struct nfsexstuff *exp,
-    struct mount **mpp, int startwrite, struct thread *p)
+    struct mount **mpp, int startwrite)
 {
 	struct mount *mp;
 	struct ucred *credanon;
@@ -3609,8 +3618,7 @@ nfssvc_srvcall(struct thread *p, struct nfssvc_args *uap, struct ucred *cred)
 			error = EPERM;
 		if (!error) {
 		    len = sizeof (struct nfsd_dumpclients) * dumplist.ndl_size;
-		    dumpclients = (struct nfsd_dumpclients *)malloc(len,
-			M_TEMP, M_WAITOK);
+		    dumpclients = malloc(len, M_TEMP, M_WAITOK | M_ZERO);
 		    nfsrv_dumpclients(dumpclients, dumplist.ndl_size);
 		    error = copyout(dumpclients,
 			CAST_USER_ADDR_T(dumplist.ndl_list), len);
@@ -3628,8 +3636,7 @@ nfssvc_srvcall(struct thread *p, struct nfssvc_args *uap, struct ucred *cred)
 		if (!error) {
 			len = sizeof (struct nfsd_dumplocks) *
 				dumplocklist.ndllck_size;
-			dumplocks = (struct nfsd_dumplocks *)malloc(len,
-				M_TEMP, M_WAITOK);
+			dumplocks = malloc(len, M_TEMP, M_WAITOK | M_ZERO);
 			nfsrv_dumplocks(nd.ni_vp, dumplocks,
 			    dumplocklist.ndllck_size, p);
 			vput(nd.ni_vp);

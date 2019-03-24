@@ -232,6 +232,8 @@ static const struct {
 	{0xa2828086, 0x00, "Intel Union Point",	0},
 	{0xa2868086, 0x00, "Intel Union Point (RAID)",	0},
 	{0xa28e8086, 0x00, "Intel Union Point (RAID)",	0},
+	{0xa3528086, 0x00, "Intel Cannon Lake",	0},
+	{0xa3538086, 0x00, "Intel Cannon Lake",	0},
 	{0x23238086, 0x00, "Intel DH89xxCC",	0},
 	{0x2360197b, 0x00, "JMicron JMB360",	0},
 	{0x2361197b, 0x00, "JMicron JMB361",	AHCI_Q_NOFORCE | AHCI_Q_1CH},
@@ -358,10 +360,7 @@ static int
 ahci_pci_ctlr_reset(device_t dev)
 {
 
-	if (pci_read_config(dev, PCIR_DEVVENDOR, 4) == 0x28298086 &&
-	    (pci_read_config(dev, 0x92, 1) & 0xfe) == 0x04)
-		pci_write_config(dev, 0x92, 0x01, 1);
-	return ahci_ctlr_reset(dev);
+	return(ahci_ctlr_reset(dev));
 }
 
 static int

@@ -42,7 +42,7 @@ SUBDIR=	${SUBDIR_BOOTSTRAP} \
 	libdevctl \
 	libdevinfo \
 	libdevstat \
-	${_libdl} \
+	libdl \
 	libdwarf \
 	libedit \
 	libelftc \
@@ -70,8 +70,6 @@ SUBDIR=	${SUBDIR_BOOTSTRAP} \
 	libpathconv \
 	libpcap \
 	libpjdlog \
-	libpmc \
-	libpmcstat \
 	${_libproc} \
 	libprocstat \
 	libregex \
@@ -135,6 +133,7 @@ SUBDIR_DEPEND_libpcap= ofed
 # NB: keep these sorted by MK_* knobs
 
 SUBDIR.${MK_ATM}+=	libngatm
+SUBDIR.${MK_BEARSSL}+=	libbearssl libsecureboot
 SUBDIR.${MK_BLACKLIST}+=libblacklist
 SUBDIR.${MK_BLUETOOTH}+=libbluetooth libsdp
 SUBDIR.${MK_BSNMP}+=	libbsnmp
@@ -167,9 +166,11 @@ _libclang_rt=	libclang_rt
 _libcxxrt=	libcxxrt
 _libcplusplus=	libc++
 _libcplusplus+=	libc++experimental
+_libcplusplus+=	libc++fs
 .endif
 
 SUBDIR.${MK_EFI}+=	libefivar
+SUBDIR.${MK_GOOGLETEST}+=	googletest
 SUBDIR.${MK_LIBTHR}+=	libthr
 SUBDIR.${MK_LLVM_LIBUNWIND}+=	libgcc_eh
 SUBDIR.${MK_LLVM_LIBUNWIND}+=	libgcc_s
@@ -195,11 +196,9 @@ _libproc=	libproc
 _librtld_db=	librtld_db
 .endif
 
-.if defined(LINKER_FEATURES) && ${LINKER_FEATURES:Mfilter}
-_libdl=		libdl
-.endif
-
+SUBDIR.${MK_OPENMP}+=	libomp
 SUBDIR.${MK_OPENSSL}+=	libmp
+SUBDIR.${MK_PMC}+=	libpmc libpmcstat
 SUBDIR.${MK_RADIUS_SUPPORT}+=	libradius
 SUBDIR.${MK_SENDMAIL}+=	libmilter libsm libsmdb libsmutil
 SUBDIR.${MK_TELNET}+=	libtelnet
@@ -208,6 +207,7 @@ SUBDIR.${MK_TESTS}+=	tests
 SUBDIR.${MK_UNBOUND}+=	libunbound
 SUBDIR.${MK_USB}+=	libusbhid libusb
 SUBDIR.${MK_OFED}+=	ofed
+SUBDIR.${MK_VERIEXEC}+=	libveriexec
 SUBDIR.${MK_ZFS}+=	libbe
 
 .if !make(install)

@@ -410,8 +410,6 @@ nd_buf_import(void *arg, void **store, int count, int domain __unused,
 	struct mbuf *m;
 	int i;
 
-	KASSERT(!dumping, ("%s: ran out of pre-allocated mbufs", __func__));
-
 	q = arg;
 
 	for (i = 0; i < count; i++) {
@@ -421,6 +419,8 @@ nd_buf_import(void *arg, void **store, int count, int domain __unused,
 		trash_init(m, q == &nd_mbufq ? MSIZE : nd_clsize, flags);
 		store[i] = m;
 	}
+	KASSERT((flags & M_WAITOK) == 0 || i == count,
+	    ("%s: ran out of pre-allocated mbufs", __func__));
 	return (i);
 }
 
@@ -447,8 +447,6 @@ nd_pack_import(void *arg __unused, void **store, int count, int domain __unused,
 	void *clust;
 	int i;
 
-	KASSERT(!dumping, ("%s: ran out of pre-allocated mbufs", __func__));
-
 	for (i = 0; i < count; i++) {
 		m = m_get(MT_DATA, M_NOWAIT);
 		if (m == NULL)
@@ -461,6 +459,8 @@ nd_pack_import(void *arg __unused, void **store, int count, int domain __unused,
 		mb_ctor_clust(clust, nd_clsize, m, 0);
 		store[i] = m;
 	}
+	KASSERT((flags & M_WAITOK) == 0 || i == count,
+	    ("%s: ran out of pre-allocated mbufs", __func__));
 	return (i);
 }
 
@@ -847,7 +847,8 @@ mb_free_ext(struct mbuf *m)
 	 */
 	if (m->m_flags & M_NOFREE) {
 		freembuf = 0;
-		KASSERT(m->m_ext.ext_type == EXT_EXTREF,
+		KASSERT(m->m_ext.ext_type == EXT_EXTREF ||
+		    m->m_ext.ext_type == EXT_RXRING,
 		    ("%s: no-free mbuf %p has wrong type", __func__, m));
 	} else
 		freembuf = 1;
@@ -890,6 +891,10 @@ mb_free_ext(struct mbuf *m)
 			KASSERT(m->m_ext.ext_free != NULL,
 			    ("%s: ext_free not set", __func__));
 			m->m_ext.ext_free(m);
+			break;
+		case EXT_RXRING:
+			KASSERT(m->m_ext.ext_free == NULL,
+			    ("%s: ext_free is set", __func__));
 			break;
 		default:
 			KASSERT(m->m_ext.ext_type == 0,
@@ -1031,8 +1036,7 @@ m_getjcl(int how, short type, int flags, int size)
  * Allocate a given length worth of mbufs and/or clusters (whatever fits
  * best) and return a pointer to the top of the allocated chain.  If an
  * existing mbuf chain is provided, then we will append the new chain
- * to the existing one but still return the top of the newly allocated
- * chain.
+ * to the existing one and return a pointer to the provided mbuf.
  */
 struct mbuf *
 m_getm2(struct mbuf *m, int len, int how, short type, int flags)

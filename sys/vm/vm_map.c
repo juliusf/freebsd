@@ -283,12 +283,7 @@ vmspace_alloc(vm_offset_t min, vm_offset_t max, pmap_pinit_t pinit)
 	struct vmspace *vm;
 
 	vm = uma_zalloc(vmspace_zone, M_WAITOK);
-
 	KASSERT(vm->vm_map.pmap == NULL, ("vm_map.pmap must be NULL"));
-
-	if (pinit == NULL)
-		pinit = &pmap_pinit;
-
 	if (!pinit(vmspace_pmap(vm))) {
 		uma_zfree(vmspace_zone, vm);
 		return (NULL);
@@ -396,8 +391,8 @@ vmspace_exit(struct thread *td)
 	p = td->td_proc;
 	vm = p->p_vmspace;
 	atomic_add_int(&vmspace0.vm_refcnt, 1);
+	refcnt = vm->vm_refcnt;
 	do {
-		refcnt = vm->vm_refcnt;
 		if (refcnt > 1 && p->p_vmspace != &vmspace0) {
 			/* Switch now since other proc might free vmspace */
 			PROC_VMSPACE_LOCK(p);
@@ -405,7 +400,7 @@ vmspace_exit(struct thread *td)
 			PROC_VMSPACE_UNLOCK(p);
 			pmap_activate(td);
 		}
-	} while (!atomic_cmpset_int(&vm->vm_refcnt, refcnt, refcnt - 1));
+	} while (!atomic_fcmpset_int(&vm->vm_refcnt, &refcnt, refcnt - 1));
 	if (refcnt == 1) {
 		if (p->p_vmspace != vm) {
 			/* vmspace not yet freed, switch back */
@@ -442,13 +437,13 @@ vmspace_acquire_ref(struct proc *p)
 		PROC_VMSPACE_UNLOCK(p);
 		return (NULL);
 	}
+	refcnt = vm->vm_refcnt;
 	do {
-		refcnt = vm->vm_refcnt;
 		if (refcnt <= 0) { 	/* Avoid 0->1 transition */
 			PROC_VMSPACE_UNLOCK(p);
 			return (NULL);
 		}
-	} while (!atomic_cmpset_int(&vm->vm_refcnt, refcnt, refcnt + 1));
+	} while (!atomic_fcmpset_int(&vm->vm_refcnt, &refcnt, refcnt + 1));
 	if (vm != p->p_vmspace) {
 		PROC_VMSPACE_UNLOCK(p);
 		vmspace_free(vm);
@@ -806,6 +801,7 @@ _vm_map_init(vm_map_t map, pmap_t pmap, vm_offset_t min, vm_offset_t max)
 	map->root = NULL;
 	map->timestamp = 0;
 	map->busy = 0;
+	map->anon_loc = 0;
 }
 
 void
@@ -1485,6 +1481,36 @@ vm_map_fixed(vm_map_t map, vm_object_t object, vm_ooffset_t offset,
 	return (result);
 }
 
+static const int aslr_pages_rnd_64[2] = {0x1000, 0x10};
+static const int aslr_pages_rnd_32[2] = {0x100, 0x4};
+
+static int cluster_anon = 1;
+SYSCTL_INT(_vm, OID_AUTO, cluster_anon, CTLFLAG_RW,
+    &cluster_anon, 0,
+    "Cluster anonymous mappings: 0 = no, 1 = yes if no hint, 2 = always");
+
+static bool
+clustering_anon_allowed(vm_offset_t addr)
+{
+
+	switch (cluster_anon) {
+	case 0:
+		return (false);
+	case 1:
+		return (addr == 0);
+	case 2:
+	default:
+		return (true);
+	}
+}
+
+static long aslr_restarts;
+SYSCTL_LONG(_vm, OID_AUTO, aslr_restarts, CTLFLAG_RD,
+    &aslr_restarts, 0,
+    "Number of aslr failures");
+
+#define	MAP_32BIT_MAX_ADDR	((vm_offset_t)1 << 31)
+
 /*
  * Searches for the specified amount of free space in the given map with the
  * specified alignment.  Performs an address-ordered, first-fit search from
@@ -1564,12 +1590,15 @@ vm_map_find(vm_map_t map, vm_object_t object, vm_ooffset_t offset,
 	    vm_size_t length, vm_offset_t max_addr, int find_space,
 	    vm_prot_t prot, vm_prot_t max, int cow)
 {
-	vm_offset_t alignment, min_addr;
-	int rv;
+	vm_offset_t alignment, curr_min_addr, min_addr;
+	int gap, pidx, rv, try;
+	bool cluster, en_aslr, update_anon;
 
 	KASSERT((cow & (MAP_STACK_GROWS_DOWN | MAP_STACK_GROWS_UP)) == 0 ||
 	    object == NULL,
 	    ("vm_map_find: non-NULL backing object for stack"));
+	MPASS((cow & MAP_REMAP) == 0 || (find_space == VMFS_NO_SPACE &&
+	    (cow & (MAP_STACK_GROWS_DOWN | MAP_STACK_GROWS_UP)) == 0));
 	if (find_space == VMFS_OPTIMAL_SPACE && (object == NULL ||
 	    (object->flags & OBJ_COLORED) == 0))
 		find_space = VMFS_ANY_SPACE;
@@ -1578,28 +1607,109 @@ vm_map_find(vm_map_t map, vm_object_t object, vm_ooffset_t offset,
 		alignment = (vm_offset_t)1 << (find_space >> 8);
 	} else
 		alignment = 0;
+	en_aslr = (map->flags & MAP_ASLR) != 0;
+	update_anon = cluster = clustering_anon_allowed(*addr) &&
+	    (map->flags & MAP_IS_SUB_MAP) == 0 && max_addr == 0 &&
+	    find_space != VMFS_NO_SPACE && object == NULL &&
+	    (cow & (MAP_INHERIT_SHARE | MAP_STACK_GROWS_UP |
+	    MAP_STACK_GROWS_DOWN)) == 0 && prot != PROT_NONE;
+	curr_min_addr = min_addr = *addr;
+	if (en_aslr && min_addr == 0 && !cluster &&
+	    find_space != VMFS_NO_SPACE &&
+	    (map->flags & MAP_ASLR_IGNSTART) != 0)
+		curr_min_addr = min_addr = vm_map_min(map);
+	try = 0;
 	vm_map_lock(map);
+	if (cluster) {
+		curr_min_addr = map->anon_loc;
+		if (curr_min_addr == 0)
+			cluster = false;
+	}
 	if (find_space != VMFS_NO_SPACE) {
 		KASSERT(find_space == VMFS_ANY_SPACE ||
 		    find_space == VMFS_OPTIMAL_SPACE ||
 		    find_space == VMFS_SUPER_SPACE ||
 		    alignment != 0, ("unexpected VMFS flag"));
-		min_addr = *addr;
 again:
-		if (vm_map_findspace(map, min_addr, length, addr) ||
+		/*
+		 * When creating an anonymous mapping, try clustering
+		 * with an existing anonymous mapping first.
+		 *
+		 * We make up to two attempts to find address space
+		 * for a given find_space value. The first attempt may
+		 * apply randomization or may cluster with an existing
+		 * anonymous mapping. If this first attempt fails,
+		 * perform a first-fit search of the available address
+		 * space.
+		 *
+		 * If all tries failed, and find_space is
+		 * VMFS_OPTIMAL_SPACE, fallback to VMFS_ANY_SPACE.
+		 * Again enable clustering and randomization.
+		 */
+		try++;
+		MPASS(try <= 2);
+
+		if (try == 2) {
+			/*
+			 * Second try: we failed either to find a
+			 * suitable region for randomizing the
+			 * allocation, or to cluster with an existing
+			 * mapping.  Retry with free run.
+			 */
+			curr_min_addr = (map->flags & MAP_ASLR_IGNSTART) != 0 ?
+			    vm_map_min(map) : min_addr;
+			atomic_add_long(&aslr_restarts, 1);
+		}
+
+		if (try == 1 && en_aslr && !cluster) {
+			/*
+			 * Find space for allocation, including
+			 * gap needed for later randomization.
+			 */
+			pidx = MAXPAGESIZES > 1 && pagesizes[1] != 0 &&
+			    (find_space == VMFS_SUPER_SPACE || find_space ==
+			    VMFS_OPTIMAL_SPACE) ? 1 : 0;
+			gap = vm_map_max(map) > MAP_32BIT_MAX_ADDR &&
+			    (max_addr == 0 || max_addr > MAP_32BIT_MAX_ADDR) ?
+			    aslr_pages_rnd_64[pidx] : aslr_pages_rnd_32[pidx];
+			if (vm_map_findspace(map, curr_min_addr, length +
+			    gap * pagesizes[pidx], addr))
+				goto again;
+			/* And randomize the start address. */
+			*addr += (arc4random() % gap) * pagesizes[pidx];
+			if (max_addr != 0 && *addr + length > max_addr)
+				goto again;
+		} else if (vm_map_findspace(map, curr_min_addr, length, addr) ||
 		    (max_addr != 0 && *addr + length > max_addr)) {
+			if (cluster) {
+				cluster = false;
+				MPASS(try == 1);
+				goto again;
+			}
 			rv = KERN_NO_SPACE;
 			goto done;
 		}
+
 		if (find_space != VMFS_ANY_SPACE &&
 		    (rv = vm_map_alignspace(map, object, offset, addr, length,
 		    max_addr, alignment)) != KERN_SUCCESS) {
 			if (find_space == VMFS_OPTIMAL_SPACE) {
 				find_space = VMFS_ANY_SPACE;
+				curr_min_addr = min_addr;
+				cluster = update_anon;
+				try = 0;
 				goto again;
 			}
 			goto done;
 		}
+	} else if ((cow & MAP_REMAP) != 0) {
+		if (*addr < vm_map_min(map) ||
+		    *addr + length > vm_map_max(map) ||
+		    *addr + length <= length) {
+			rv = KERN_INVALID_ADDRESS;
+			goto done;
+		}
+		vm_map_delete(map, *addr, *addr + length);
 	}
 	if ((cow & (MAP_STACK_GROWS_DOWN | MAP_STACK_GROWS_UP)) != 0) {
 		rv = vm_map_stack_locked(map, *addr, length, sgrowsiz, prot,
@@ -1608,6 +1718,8 @@ again:
 		rv = vm_map_insert(map, object, offset, *addr, *addr + length,
 		    prot, max, cow);
 	}
+	if (rv == KERN_SUCCESS && update_anon)
+		map->anon_loc = *addr + length;
 done:
 	vm_map_unlock(map);
 	return (rv);
@@ -1644,16 +1756,25 @@ vm_map_find_min(vm_map_t map, vm_object_t object, vm_ooffset_t offset,
 	}
 }
 
+/*
+ * A map entry with any of the following flags set must not be merged with
+ * another entry.
+ */
+#define	MAP_ENTRY_NOMERGE_MASK	(MAP_ENTRY_GROWS_DOWN | MAP_ENTRY_GROWS_UP | \
+	    MAP_ENTRY_IN_TRANSITION | MAP_ENTRY_IS_SUB_MAP)
+
 static bool
 vm_map_mergeable_neighbors(vm_map_entry_t prev, vm_map_entry_t entry)
 {
-	vm_size_t prevsize;
 
-	prevsize = prev->end - prev->start;
+	KASSERT((prev->eflags & MAP_ENTRY_NOMERGE_MASK) == 0 ||
+	    (entry->eflags & MAP_ENTRY_NOMERGE_MASK) == 0,
+	    ("vm_map_mergeable_neighbors: neither %p nor %p are mergeable",
+	    prev, entry));
 	return (prev->end == entry->start &&
 	    prev->object.vm_object == entry->object.vm_object &&
 	    (prev->object.vm_object == NULL ||
-	    prev->offset + prevsize == entry->offset) &&
+	    prev->offset + (prev->end - prev->start) == entry->offset) &&
 	    prev->eflags == entry->eflags &&
 	    prev->protection == entry->protection &&
 	    prev->max_protection == entry->max_protection &&
@@ -1667,18 +1788,14 @@ vm_map_merged_neighbor_dispose(vm_map_t map, vm_map_entry_t entry)
 {
 
 	/*
-	 * If the backing object is a vnode object,
-	 * vm_object_deallocate() calls vrele().
-	 * However, vrele() does not lock the vnode
-	 * because the vnode has additional
-	 * references.  Thus, the map lock can be kept
-	 * without causing a lock-order reversal with
-	 * the vnode lock.
+	 * If the backing object is a vnode object, vm_object_deallocate()
+	 * calls vrele().  However, vrele() does not lock the vnode because
+	 * the vnode has additional references.  Thus, the map lock can be
+	 * kept without causing a lock-order reversal with the vnode lock.
 	 *
-	 * Since we count the number of virtual page
-	 * mappings in object->un_pager.vnp.writemappings,
-	 * the writemappings value should not be adjusted
-	 * when the entry is disposed of.
+	 * Since we count the number of virtual page mappings in
+	 * object->un_pager.vnp.writemappings, the writemappings value
+	 * should not be adjusted when the entry is disposed of.
 	 */
 	if (entry->object.vm_object != NULL)
 		vm_object_deallocate(entry->object.vm_object);
@@ -1704,10 +1821,8 @@ vm_map_simplify_entry(vm_map_t map, vm_map_entry_t entry)
 {
 	vm_map_entry_t next, prev;
 
-	if ((entry->eflags & (MAP_ENTRY_GROWS_DOWN | MAP_ENTRY_GROWS_UP |
-	    MAP_ENTRY_IN_TRANSITION | MAP_ENTRY_IS_SUB_MAP)) != 0)
+	if ((entry->eflags & MAP_ENTRY_NOMERGE_MASK) != 0)
 		return;
-
 	prev = entry->prev;
 	if (vm_map_mergeable_neighbors(prev, entry)) {
 		vm_map_entry_unlink(map, prev);
@@ -1717,7 +1832,6 @@ vm_map_simplify_entry(vm_map_t map, vm_map_entry_t entry)
 			vm_map_entry_resize_free(map, entry->prev);
 		vm_map_merged_neighbor_dispose(map, prev);
 	}
-
 	next = entry->next;
 	if (vm_map_mergeable_neighbors(entry, next)) {
 		vm_map_entry_unlink(map, next);
@@ -1726,6 +1840,7 @@ vm_map_simplify_entry(vm_map_t map, vm_map_entry_t entry)
 		vm_map_merged_neighbor_dispose(map, next);
 	}
 }
+
 /*
  *	vm_map_clip_start:	[ internal use only ]
  *
@@ -1914,7 +2029,13 @@ vm_map_submap(
 	vm_map_t submap)
 {
 	vm_map_entry_t entry;
-	int result = KERN_INVALID_ARGUMENT;
+	int result;
+
+	result = KERN_INVALID_ARGUMENT;
+
+	vm_map_lock(submap);
+	submap->flags |= MAP_IS_SUB_MAP;
+	vm_map_unlock(submap);
 
 	vm_map_lock(map);
 
@@ -1936,6 +2057,11 @@ vm_map_submap(
 	}
 	vm_map_unlock(map);
 
+	if (result != KERN_SUCCESS) {
+		vm_map_lock(submap);
+		submap->flags &= ~MAP_IS_SUB_MAP;
+		vm_map_unlock(submap);
+	}
 	return (result);
 }
 
@@ -3162,6 +3288,9 @@ vm_map_delete(vm_map_t map, vm_offset_t start, vm_offset_t end)
 		    entry->object.vm_object != NULL)
 			pmap_remove(map->pmap, entry->start, entry->end);
 
+		if (entry->end == map->anon_loc)
+			map->anon_loc = entry->start;
+
 		/*
 		 * Delete the entry only after removing all pmap
 		 * entries pointing to its pages.  (Otherwise, its
@@ -3416,14 +3545,16 @@ vmspace_fork(struct vmspace *vm1, vm_ooffset_t *fork_charge)
 	vm_map_t new_map, old_map;
 	vm_map_entry_t new_entry, old_entry;
 	vm_object_t object;
-	int locked;
+	int error, locked;
 	vm_inherit_t inh;
 
 	old_map = &vm1->vm_map;
 	/* Copy immutable fields of vm1 to vm2. */
-	vm2 = vmspace_alloc(vm_map_min(old_map), vm_map_max(old_map), NULL);
+	vm2 = vmspace_alloc(vm_map_min(old_map), vm_map_max(old_map),
+	    pmap_pinit);
 	if (vm2 == NULL)
 		return (NULL);
+
 	vm2->vm_taddr = vm1->vm_taddr;
 	vm2->vm_daddr = vm1->vm_daddr;
 	vm2->vm_maxsaddr = vm1->vm_maxsaddr;
@@ -3433,6 +3564,17 @@ vmspace_fork(struct vmspace *vm1, vm_ooffset_t *fork_charge)
 	new_map = &vm2->vm_map;
 	locked = vm_map_trylock(new_map); /* trylock to silence WITNESS */
 	KASSERT(locked, ("vmspace_fork: lock failed"));
+
+	error = pmap_vmspace_copy(new_map->pmap, old_map->pmap);
+	if (error != 0) {
+		sx_xunlock(&old_map->lock);
+		sx_xunlock(&new_map->lock);
+		vm_map_process_deferred();
+		vmspace_free(vm2);
+		return (NULL);
+	}
+
+	new_map->anon_loc = old_map->anon_loc;
 
 	old_entry = old_map->header.next;
 
@@ -3972,7 +4114,7 @@ vmspace_exec(struct proc *p, vm_offset_t minuser, vm_offset_t maxuser)
 
 	KASSERT((curthread->td_pflags & TDP_EXECVMSPC) == 0,
 	    ("vmspace_exec recursed"));
-	newvmspace = vmspace_alloc(minuser, maxuser, NULL);
+	newvmspace = vmspace_alloc(minuser, maxuser, pmap_pinit);
 	if (newvmspace == NULL)
 		return (ENOMEM);
 	newvmspace->vm_swrss = oldvmspace->vm_swrss;
@@ -4214,7 +4356,7 @@ RetryLookupLocked:
 	 * Return the object/offset from this entry.  If the entry was
 	 * copy-on-write or empty, it has been fixed up.
 	 */
-	*pindex = UOFF_TO_IDX((vaddr - entry->start) + entry->offset);
+	*pindex = OFF_TO_IDX((vaddr - entry->start) + entry->offset);
 	*object = entry->object.vm_object;
 
 	*out_prot = prot;
@@ -4295,7 +4437,7 @@ vm_map_lookup_locked(vm_map_t *var_map,		/* IN/OUT */
 	 * Return the object/offset from this entry.  If the entry was
 	 * copy-on-write or empty, it has been fixed up.
 	 */
-	*pindex = UOFF_TO_IDX((vaddr - entry->start) + entry->offset);
+	*pindex = OFF_TO_IDX((vaddr - entry->start) + entry->offset);
 	*object = entry->object.vm_object;
 
 	*out_prot = prot;

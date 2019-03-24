@@ -939,7 +939,7 @@ moea64_late_bootstrap(mmu_t mmup, vm_offset_t kernelstart, vm_offset_t kernelend
 	 */
 	Maxmem = 0;
 	for (i = 0; phys_avail[i + 2] != 0; i += 2)
-		Maxmem = max(Maxmem, powerpc_btop(phys_avail[i + 1]));
+		Maxmem = MAX(Maxmem, powerpc_btop(phys_avail[i + 1]));
 
 	/*
 	 * Initialize MMU.
@@ -2807,7 +2807,7 @@ moea64_sync_icache(mmu_t mmu, pmap_t pm, vm_offset_t va, vm_size_t sz)
 
 	PMAP_LOCK(pm);
 	while (sz > 0) {
-		lim = round_page(va);
+		lim = round_page(va+1);
 		len = MIN(lim - va, sz);
 		pvo = moea64_pvo_find_va(pm, va & ~ADDR_POFF);
 		if (pvo != NULL && !(pvo->pvo_pte.pa & LPTE_I)) {
