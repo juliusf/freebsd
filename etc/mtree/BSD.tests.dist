@@ -769,7 +769,7 @@
         netinet
         ..
         netinet6
-            frag6
+            v6_jumbograms
             ..
         ..
         netipsec
