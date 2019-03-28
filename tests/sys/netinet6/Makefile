@@ -9,5 +9,6 @@ TEST_METADATA.jumbograms+= required_user="root"
 TEST_METADATA+= is_exclusive=true
 
 ${PACKAGE}FILES+=	utils.subr \
-			v6_jumbograms/v6_jumbogram.py
+			v6_jumbograms/v6_jumbogram.py \
+			v6_jumbograms/v6_jumbo_invalid_packet01.py
 .include <bsd.test.mk>

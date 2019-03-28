@@ -3,6 +3,7 @@
 print "rfc2675 jumbograms"
 
 import os
+return 0
 from addr import *
 from scapy.all import *
 
