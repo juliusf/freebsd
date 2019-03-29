@@ -10,8 +10,17 @@
 #             Pointer: high-order octet of the IPv6 Payload Length
 
 import os
-from addr import *
+#from addr import *
 from scapy.all import *
+
+
+LOCAL_ADDR6 = "2001:638:501:4ef4:1a66:daff:fe85:3904"
+REMOTE_ADDR6 = "2001:638:501:4ef4:2a0:98ff:fe81:4239"
+
+LOCAL_MAC = "18:66:da:85:39:04"
+REMOTE_MAC = "00:a0:98:81:42:39"
+
+LOCAL_IF = "tap0"
 
 base = IPv6(plen=0)
 base.dst = REMOTE_ADDR6
