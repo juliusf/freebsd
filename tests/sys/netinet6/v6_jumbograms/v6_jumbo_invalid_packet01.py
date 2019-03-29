@@ -20,14 +20,14 @@ extension = IPv6ExtHdrHopByHop()
 
 pkt = base / extension
 pkt.len = 0
-eth = Ether(src=LOCAL_MAC, dst=REMOTE_MAC) / pkt / Raw( load=0xdeadbeef )
+eth = Ether(src=LOCAL_MAC, dst=REMOTE_MAC) / pkt #/ Raw( load=0xdeadbeef )
 
 if os.fork() == 0:
     time.sleep(1)
     sendp(eth, iface=LOCAL_IF)
     exit(0)
 
-ans = sniff( iface=LOCAL_IF, timeout=3, filter=
+ans = sniff( iface=LOCAL_IF, count=1, timeout=3, filter=
             "ip6 and src "+REMOTE_ADDR6+" and dst "+LOCAL_ADDR6+" and icmp6")
 
 for pkt in ans:

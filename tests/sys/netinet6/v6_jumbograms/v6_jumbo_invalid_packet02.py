@@ -1,13 +1,11 @@
 #!/usr/local/bin/python2.7
 
-
-#       error: IPv6 Payload Length = 0 and
-#              IPv6 Next Header = Hop-by-Hop Options and
-#              Jumbo Payload option not present
-
-#       expected result:
+#      error: IPv6 Payload Length != 0 and
+#             Jumbo Payload option present
+#
+#      expected result:
 #             Code: 0
-#             Pointer: high-order octet of the IPv6 Payload Length
+#             Pointer: Option Type field of the Jumbo Payload option
 
 import os
 #from addr import *
@@ -22,13 +20,16 @@ REMOTE_MAC = "00:a0:98:81:42:39"
 
 LOCAL_IF = "tap0"
 
-base = IPv6(plen=0)
+base = IPv6() #plen=32
 base.dst = REMOTE_ADDR6
 base.src = LOCAL_ADDR6
 extension = IPv6ExtHdrHopByHop()
-
+jumbo = Jumbo()
+jumbo.jumboplen = 0xDEADBEEFA
+extension.options = jumbo
 pkt = base / extension
-pkt.len = 0
+
+pkt.show()
 eth = Ether(src=LOCAL_MAC, dst=REMOTE_MAC) / pkt / Raw( load=0xdeadbeef )
 
 if os.fork() == 0:
@@ -36,7 +37,7 @@ if os.fork() == 0:
     sendp(eth, iface=LOCAL_IF)
     exit(0)
 
-ans = sniff( iface=LOCAL_IF, timeout=3, filter=
+ans = sniff( iface=LOCAL_IF, count=1, timeout=3, filter=
             "ip6 and src "+REMOTE_ADDR6+" and dst "+LOCAL_ADDR6+" and icmp6")
 
 for pkt in ans:
