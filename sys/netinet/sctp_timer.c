@@ -1450,7 +1450,68 @@ sctp_heartbeat_timer(struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 		} else {
 			ms_gone_by = 0xffffffff;
 		}
-		if ((ms_gone_by >= net->heart_beat_delay) ||
+		if (inp->plpmtud_supported && net->mtu_probing) {
+			uint32_t base;
+#ifdef INET6
+			if (stcb->asoc.scope.ipv6_addr_legal) {
+				base = SCTP_PROBE_MTU_V6_BASE;
+			}
+#endif
+#ifdef INET
+			if (stcb->asoc.scope.ipv4_addr_legal) {
+				base = SCTP_PROBE_MTU_V4_BASE;
+			}
+#endif
+			if ((++net->probe_counts < SCTP_PROBE_MAX_PROBES)
+			    && net->probing_state > SCTP_PROBE_ERROR
+			    && net->probing_state < SCTP_PROBE_DONE) {
+				SCTPDBG(SCTP_DEBUG_TIMER1, "Retransmit the probe of %d bytes\n", net->probe_mtu);
+				sctp_send_a_probe(inp, stcb, net);
+			} else {
+				switch (net->probing_state) {
+				case SCTP_PROBE_BASE:
+					net->probe_counts = 0;
+					net->probed_mtu = SCTP_PROBE_MIN;
+					net->mtu_probing = 0;
+					net->probing_state = SCTP_PROBE_ERROR;
+					net->mtu = SCTP_PROBE_MIN;
+					sctp_pathmtu_adjustment(stcb, net->mtu, net);
+					sctp_send_hb(stcb, net, SCTP_SO_NOT_LOCKED);
+					break;
+				case SCTP_PROBE_SEARCH_UP:
+					net->probe_counts = 0;
+					net->mtu_probing = 0;
+					net->mtu = net->probed_mtu;
+					net->probing_state = SCTP_PROBE_DONE;
+					sctp_pathmtu_adjustment(stcb, net->mtu, net);
+					break;
+				case SCTP_PROBE_SEARCH_DOWN:
+					net->max_mtu = sctp_get_prev_mtu(net->max_mtu);
+					if ((net->max_mtu > base) && (sctp_get_next_mtu(base) != net->max_mtu)) {
+						net->probe_mtu = sctp_get_next_mtu(base);
+						net->probe_counts = 0;
+						net->probing_state = SCTP_PROBE_SEARCH_UP;
+						net->mtu = net->probe_mtu;
+						sctp_pathmtu_adjustment(stcb, net->probed_mtu, net);
+						sctp_send_a_probe(inp, stcb, net);
+					} else if (net->max_mtu == base) {
+						net->probe_mtu = base;
+						net->probe_counts = 0;
+						net->probing_state = SCTP_PROBE_BASE;
+						sctp_send_a_probe(inp, stcb, net);
+					} else if (net->max_mtu < base) {
+						net->probe_counts = 0;
+						net->probed_mtu = SCTP_PROBE_MIN;
+						net->mtu_probing = 0;
+						net->probing_state = SCTP_PROBE_ERROR;
+						net->mtu = SCTP_PROBE_MIN;
+						sctp_pathmtu_adjustment(stcb, net->mtu, net);
+						sctp_send_hb(stcb, net, SCTP_SO_NOT_LOCKED);
+					}
+					break;
+				}
+			}
+		} else if ((ms_gone_by >= net->heart_beat_delay) ||
 		    (net->dest_state & SCTP_ADDR_PF)) {
 			sctp_send_hb(stcb, net, SCTP_SO_NOT_LOCKED);
 		}
@@ -1516,6 +1577,7 @@ sctp_pathmtu_timer(struct sctp_inpcb *inp,
 	}
 	/* restart the timer */
 	sctp_timer_start(SCTP_TIMER_TYPE_PATHMTURAISE, inp, stcb, net);
+    }
 }
 
 void

@@ -3927,7 +3927,7 @@ sctp_get_ect(struct sctp_tcb *stcb)
 }
 
 #if defined(INET) || defined(INET6)
-static void
+void
 sctp_handle_no_route(struct sctp_tcb *stcb,
     struct sctp_nets *net,
     int so_locked)
@@ -4289,12 +4289,11 @@ sctp_lowlevel_chunk_output(struct sctp_inpcb *inp,
 						if (net->port) {
 							mtu -= sizeof(struct udphdr);
 						}
-						if (mtu < net->mtu) {
 							if ((stcb != NULL) && (stcb->asoc.smallest_mtu > mtu)) {
 								sctp_mtu_size_reset(inp, &stcb->asoc, mtu);
 							}
 							net->mtu = mtu;
-						}
+					net->got_max = 1;
 					}
 				} else if (ro->ro_rt == NULL) {
 					/* route was freed */
@@ -4646,17 +4645,23 @@ sctp_lowlevel_chunk_output(struct sctp_inpcb *inp,
 
 					mtu = SCTP_GATHER_MTU_FROM_ROUTE(net->ro._s_addr, &net->ro._l_addr.sa, ro->ro_rt);
 					if (mtu > 0) {
+					if (!stcb->sctp_ep->plpmtud_supported) {
 						if (net->port) {
 							mtu -= sizeof(struct udphdr);
 						}
-						if (mtu < net->mtu) {
 							if ((stcb != NULL) && (stcb->asoc.smallest_mtu > mtu)) {
 								sctp_mtu_size_reset(inp, &stcb->asoc, mtu);
 							}
 							net->mtu = mtu;
+					} else {
+						if (net->port) {
+							net->mtu -= sizeof(struct udphdr);
 						}
 					}
-				} else if (ifp) {
+					net->got_max = 1;
+				}
+			}
+			else if (ifp) {
 					if (ND_IFINFO(ifp)->linkmtu &&
 					    (stcb->asoc.smallest_mtu > ND_IFINFO(ifp)->linkmtu)) {
 						sctp_mtu_size_reset(inp,
@@ -11083,12 +11088,12 @@ sctp_send_shutdown_complete(struct sctp_tcb *stcb,
 	return;
 }
 
-static void
+void
 sctp_send_resp_msg(struct sockaddr *src, struct sockaddr *dst,
     struct sctphdr *sh, uint32_t vtag,
     uint8_t type, struct mbuf *cause,
     uint8_t mflowtype, uint32_t mflowid, uint16_t fibnum,
-    uint32_t vrf_id, uint16_t port)
+    uint32_t vrf_id, uint16_t port, struct sctp_tcb *stcb)
 {
 	struct mbuf *o_pak;
 	struct mbuf *mout;
@@ -11131,7 +11136,11 @@ sctp_send_resp_msg(struct sockaddr *src, struct sockaddr *dst,
 		padding_len = 0;
 	}
 	/* Get an mbuf for the header. */
+	if (type == SCTP_PAD_CHUNK) {
+		len = sizeof(struct sctphdr);
+	} else {
 	len = sizeof(struct sctphdr) + sizeof(struct sctp_chunkhdr);
+	}
 	switch (dst->sa_family) {
 #ifdef INET
 	case AF_INET:
@@ -11249,15 +11258,17 @@ sctp_send_resp_msg(struct sockaddr *src, struct sockaddr *dst,
 		shout->v_tag = sh->v_tag;
 	}
 	len += sizeof(struct sctphdr);
-	ch = (struct sctp_chunkhdr *)((caddr_t)shout + sizeof(struct sctphdr));
-	ch->chunk_type = type;
-	if (vtag) {
-		ch->chunk_flags = 0;
-	} else {
-		ch->chunk_flags = SCTP_HAD_NO_TCB;
+	if (type != SCTP_PAD_CHUNK) {
+		ch = (struct sctp_chunkhdr *)((caddr_t)shout + sizeof(struct sctphdr));
+		ch->chunk_type = type;
+		if (vtag) {
+			ch->chunk_flags = 0;
+		} else {
+			ch->chunk_flags = SCTP_HAD_NO_TCB;
+		}
+		ch->chunk_length = htons((uint16_t)(sizeof(struct sctp_chunkhdr) + cause_len));
+		len += sizeof(struct sctp_chunkhdr);
 	}
-	ch->chunk_length = htons((uint16_t)(sizeof(struct sctp_chunkhdr) + cause_len));
-	len += sizeof(struct sctp_chunkhdr);
 	len += cause_len + padding_len;
 
 	if (SCTP_GET_HEADER_FOR_OUTPUT(o_pak)) {
@@ -11293,7 +11304,11 @@ sctp_send_resp_msg(struct sockaddr *src, struct sockaddr *dst,
 		}
 #endif
 		SCTP_PROBE5(send, NULL, NULL, ip, NULL, shout);
-		SCTP_IP_OUTPUT(ret, o_pak, NULL, NULL, vrf_id);
+		if (type == SCTP_PAD_CHUNK) {
+			SCTP_IP_OUTPUT(ret, o_pak, NULL, stcb, vrf_id);
+		} else {
+			SCTP_IP_OUTPUT(ret, o_pak, NULL, NULL, vrf_id);
+		}
 		break;
 #endif
 #ifdef INET6
@@ -11347,7 +11362,7 @@ sctp_send_shutdown_complete2(struct sockaddr *src, struct sockaddr *dst,
 {
 	sctp_send_resp_msg(src, dst, sh, 0, SCTP_SHUTDOWN_COMPLETE, NULL,
 	    mflowtype, mflowid, fibnum,
-	    vrf_id, port);
+	    vrf_id, port, NULL);
 }
 
 void
