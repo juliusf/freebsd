@@ -380,7 +380,7 @@ sctp6_notify(struct sctp_inpcb *inp,
 			}
 			/* Update the association MTU */
 			if (stcb->asoc.smallest_mtu > next_mtu) {
-				sctp_pathmtu_adjustment(stcb, next_mtu);
+				sctp_pathmtu_adjustment(stcb, next_mtu, net);
 			}
 			/* Finally, start the PMTU timer if it was running before. */
 			if (timer_stopped) {
@@ -486,10 +486,10 @@ sctp6_ctlinput(int cmd, struct sockaddr *pktdst, void *d)
 					return;
 				}
 			} else {
-				if (ip6cp->ip6c_m->m_pkthdr.len >=
-				    ip6cp->ip6c_off + sizeof(struct sctphdr) +
+				if (ip6cp->ip6c_m->m_pkthdr.len >= (uint16_t)
+				    (ip6cp->ip6c_off + sizeof(struct sctphdr) +
 				    sizeof(struct sctp_chunkhdr) +
-				    offsetof(struct sctp_init, a_rwnd)) {
+				    offsetof(struct sctp_init, a_rwnd))) {
 					/*
 					 * In this case we can check if we
 					 * got an INIT chunk and if the
@@ -522,7 +522,7 @@ sctp6_ctlinput(int cmd, struct sockaddr *pktdst, void *d)
 			sctp6_notify(inp, stcb, net,
 			    ip6cp->ip6c_icmp6->icmp6_type,
 			    ip6cp->ip6c_icmp6->icmp6_code,
-			    ntohl(ip6cp->ip6c_icmp6->icmp6_mtu));
+			             (uint16_t)ntohl(ip6cp->ip6c_icmp6->icmp6_mtu));
 		} else {
 			if ((stcb == NULL) && (inp != NULL)) {
 				/* reduce inp's ref-count */
