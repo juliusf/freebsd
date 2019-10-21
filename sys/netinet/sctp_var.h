@@ -338,11 +338,10 @@ int sctp_ctloutput(struct socket *, struct sockopt *);
 void sctp_input_with_port(struct mbuf *, int, uint16_t);
 int sctp_input(struct mbuf **, int *, int);
 #endif
-void sctp_pathmtu_adjustment(struct sctp_tcb *, uint16_t);
+void sctp_pathmtu_adjustment(struct sctp_tcb *, uint16_t, struct sctp_nets *);
 void sctp_drain(void);
 void sctp_init(void);
-void
-sctp_notify(struct sctp_inpcb *, struct sctp_tcb *, struct sctp_nets *,
+void sctp_notify(struct sctp_inpcb *, struct sctp_tcb *, struct sctp_nets *,
     uint8_t, uint8_t, uint16_t, uint32_t);
 int sctp_flush(struct socket *, int);
 int sctp_shutdown(struct socket *);
