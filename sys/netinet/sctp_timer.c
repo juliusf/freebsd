@@ -1526,6 +1526,57 @@ sctp_pathmtu_timer(struct sctp_inpcb *inp,
 {
 	uint32_t next_mtu, mtu;
 
+	if (inp->plpmtud_supported) {
+		if (net->probing_state == SCTP_PROBE_DONE) {
+			net->mtu_probing = 1;
+			net->probe_mtu = net->mtu;
+			net->probing_state = SCTP_PROBE_BASE;
+			net->probe_counts = 0;
+			if ((net->src_addr_selected == 0) ||
+				(net->ro._s_addr == NULL) ||
+				(net->ro._s_addr->localifa_flags & SCTP_BEING_DELETED)) {
+				if ((net->ro._s_addr != NULL) && (net->ro._s_addr->localifa_flags & SCTP_BEING_DELETED)) {
+					sctp_free_ifa(net->ro._s_addr);
+					net->ro._s_addr = NULL;
+					net->src_addr_selected = 0;
+				} else if (net->ro._s_addr == NULL) {
+#if defined(INET6) && defined(SCTP_EMBEDDED_V6_SCOPE)
+					if (net->ro._l_addr.sa.sa_family == AF_INET6) {
+						struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)&net->ro._l_addr;
+						(void)sa6_embedscope(sin6, MODULE_GLOBAL(ip6_use_defzone));
+					}
+#endif
+
+					net->ro._s_addr = sctp_source_address_selection(inp,
+					                                                stcb,
+					                                                (sctp_route_t *)&net->ro,
+					                                                net, 0, stcb->asoc.vrf_id);
+#if defined(INET6) && defined(SCTP_EMBEDDED_V6_SCOPE)
+					if (net->ro._l_addr.sa.sa_family == AF_INET6) {
+						struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)&net->ro._l_addr;
+						(void)sa6_recoverscope(sin6);
+					}
+#endif	/* INET6 */
+				}
+				if (net->ro._s_addr)
+					net->src_addr_selected = 1;
+			}
+			if (net->ro._s_addr) {
+				mtu = SCTP_GATHER_MTU_FROM_ROUTE(net->ro._s_addr, &net->ro._s_addr.sa, net->ro.ro_rt);
+#if defined(INET) || defined(INET6)
+				if (net->port) {
+					mtu -= sizeof(struct udphdr);
+				}
+#endif
+				net->max_mtu = max(mtu, net->max_mtu);
+				net->max_mtu -= net->max_mtu % 4;
+			}
+			sctp_send_a_probe(inp, stcb, net);
+		} else {
+			/* restart the timer */
+			sctp_timer_start(SCTP_TIMER_TYPE_PATHMTURAISE, inp, stcb, net);
+		}
+	} else {
 	next_mtu = sctp_get_next_mtu(net->mtu);
 
 	if ((next_mtu > net->mtu) && (net->port == 0)) {
