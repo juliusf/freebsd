@@ -5575,7 +5575,7 @@ sctp_setopt(struct socket *so, int optname, void *optval, size_t optsize,
 							break;
 						}
 						if (net->mtu < stcb->asoc.smallest_mtu) {
-							sctp_pathmtu_adjustment(stcb, net->mtu);
+						sctp_pathmtu_adjustment(stcb, net->mtu, net);
 						}
 					}
 					if (paddrp->spp_flags & SPP_PMTUD_ENABLE) {
