@@ -12367,7 +12367,7 @@ sctp_send_abort(struct mbuf *m, int iphlen, struct sockaddr *src, struct sockadd
 	}
 	sctp_send_resp_msg(src, dst, sh, vtag, SCTP_ABORT_ASSOCIATION, cause,
 	    mflowtype, mflowid, fibnum,
-	    vrf_id, port);
+	                   vrf_id, port, NULL);
 	return;
 }
 
@@ -12379,7 +12379,7 @@ sctp_send_operr_to(struct sockaddr *src, struct sockaddr *dst,
 {
 	sctp_send_resp_msg(src, dst, sh, vtag, SCTP_OPERATION_ERROR, cause,
 	    mflowtype, mflowid, fibnum,
-	    vrf_id, port);
+	                   vrf_id, port, NULL);
 	return;
 }
 
