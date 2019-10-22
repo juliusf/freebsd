@@ -2094,7 +2094,8 @@ sctp_timer_start(int t_type, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 				to_ticks = to_ticks - jitter;
 			}
 			if (!(net->dest_state & SCTP_ADDR_UNCONFIRMED) &&
-			    !(net->dest_state & SCTP_ADDR_PF)) {
+			    !(net->dest_state & SCTP_ADDR_PF) &&
+			    !(net->mtu_probing)) {
 				to_ticks += net->heart_beat_delay;
 			}
 			/*
