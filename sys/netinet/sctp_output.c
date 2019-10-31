@@ -4258,8 +4258,8 @@ sctp_lowlevel_chunk_output(struct sctp_inpcb *inp,
 						}
 							if ((stcb != NULL) && (stcb->asoc.smallest_mtu > mtu)) {
 								sctp_mtu_size_reset(inp, &stcb->asoc, mtu);
+								net->mtu = mtu;
 							}
-							net->mtu = mtu;
 					net->got_max = 1;
 					}
 				} else if (ro->ro_nh == NULL) {
@@ -4600,8 +4600,8 @@ sctp_lowlevel_chunk_output(struct sctp_inpcb *inp,
 						}
 							if ((stcb != NULL) && (stcb->asoc.smallest_mtu > mtu)) {
 								sctp_mtu_size_reset(inp, &stcb->asoc, mtu);
+								net->mtu = mtu;
 							}
-							net->mtu = mtu;
 					} else {
 						if (net->port) {
 							net->mtu -= sizeof(struct udphdr);
