@@ -222,6 +222,11 @@ sctp_notify(struct sctp_inpcb *inp,
 				base = SCTP_PROBE_MTU_V4_BASE;
 			}
 #endif
+			/* make sure mtu reported is 4 byte aligned */
+			if (next_mtu % 4) {
+				next_mtu -= next_mtu % 4;
+			}
+
 			net->probe_counts = 0;
 			if (net->probing_state == SCTP_PROBE_DONE) {
 				sctp_pathmtu_timer(inp, stcb, net);
@@ -266,7 +271,7 @@ sctp_notify(struct sctp_inpcb *inp,
 						break;
 					case SCTP_PROBE_SEARCH_UP:
 						net->mtu_probing = 0;
-						//net->mtu = net->probed_mtu;
+						net->mtu = net->probed_mtu;
 						net->max_mtu = min(net->max_mtu, next_mtu);
 						net->probe_mtu = net->max_mtu;
 						net->probe_counts = 0;
