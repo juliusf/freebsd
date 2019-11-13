@@ -696,7 +696,7 @@ __FBSDID("$FreeBSD$");
 #define SCTP_NUMBER_OF_SECRETS	8	/* or 8 * 4 = 32 octets */
 #define SCTP_SECRET_SIZE	32	/* number of octets in a 256 bits */
 
-
+/* Probing states */
 #define SCTP_PROBE_NONE                          0
 #define SCTP_PROBE_ERROR                         1
 #define SCTP_PROBE_BASE                          2
@@ -711,6 +711,7 @@ __FBSDID("$FreeBSD$");
 #define SCTP_PROBE_MIN                          76 /* Size of a HEARTBEAT Chunk with HB Info */
 
 #define SCTP_PROBE_UP                            1
+
 /*
  * SCTP upper layer notifications
  */
