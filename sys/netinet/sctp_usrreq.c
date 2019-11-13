@@ -207,8 +207,8 @@ sctp_notify(struct sctp_inpcb *inp,
 			    (void *)net, SCTP_SO_NOT_LOCKED);
 		}
 		SCTP_TCB_UNLOCK(stcb);
-	} else if ((icmp_code == ICMP_UNREACH_PROTOCOL) ||
-	    (icmp_code == ICMP_UNREACH_PORT)) {
+	} else  if ((icmp_code == ICMP_UNREACH_PROTOCOL) ||
+		    (icmp_code == ICMP_UNREACH_PORT)) {
 		/* Treat it like an ABORT. */
 		sctp_abort_notification(stcb, 1, 0, NULL, SCTP_SO_NOT_LOCKED);
 #if defined(__APPLE__) || defined(SCTP_SO_LOCK_TESTING)
@@ -234,11 +234,6 @@ sctp_notify(struct sctp_inpcb *inp,
 				base = SCTP_PROBE_MTU_V4_BASE;
 			}
 #endif
-			/* make sure mtu reported is 4 byte aligned */
-			if (next_mtu % 4) {
-				next_mtu -= next_mtu % 4;
-			}
-
 			net->probe_counts = 0;
 			if (net->probing_state == SCTP_PROBE_DONE) {
 				sctp_pathmtu_timer(inp, stcb, net);
@@ -273,6 +268,8 @@ sctp_notify(struct sctp_inpcb *inp,
 						break;
 					}
 				} else if (net->probed_mtu <= next_mtu && next_mtu < net->probe_mtu) {
+					/* padding chunks need to be 4 byte aligned */
+					next_mtu -= next_mtu % 4;
 					switch (net->probing_state) {
 					case SCTP_PROBE_BASE:
 						net->probed_mtu = SCTP_PROBE_MIN;
@@ -297,6 +294,8 @@ sctp_notify(struct sctp_inpcb *inp,
 						break;
 					}
 				} else if (next_mtu < net->probed_mtu) {
+					/* padding chunks need to be 4 byte aligned */
+					next_mtu -= next_mtu % 4;
 					switch (net->probing_state) {
 					case SCTP_PROBE_BASE:
 					case SCTP_PROBE_SEARCH_DOWN:
@@ -325,6 +324,8 @@ sctp_notify(struct sctp_inpcb *inp,
 						break;
 					}
 				} else if (next_mtu == base) {
+					/* padding chunks need to be 4 byte aligned */
+					next_mtu -= next_mtu % 4;
 					switch (net->probing_state) {
 					case SCTP_PROBE_BASE:
 						net->probed_mtu = SCTP_PROBE_MIN;
