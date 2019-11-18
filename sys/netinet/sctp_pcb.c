@@ -3929,9 +3929,9 @@ sctp_add_remote_addr(struct sctp_tcb *stcb, struct sockaddr *newaddr,
 	stcb->asoc.numnets++;
 	net->ref_count = 1;
 	if (stcb->asoc.plpmtud_supported) {
-		net->probe_mtu = 0;
+		net->probed_size = 0;
 		net->mtu_probing = 0;
-		net->probing_state = SCTP_PROBE_NONE;
+		net->probing_state = SCTP_PROBE_DISABLED;
 		net->got_max = 0;
 	}
 	net->cwr_window_tsn = net->last_cwr_tsn = stcb->asoc.sending_seq - 1;
@@ -4025,8 +4025,8 @@ sctp_add_remote_addr(struct sctp_tcb *stcb, struct sockaddr *newaddr,
 				net->mtu = min(rmtu, SCTP_DEFAULT_MTU);
 			}
 			if (stcb->asoc.plpmtud_supported) {
-				net->max_mtu = max(net->mtu, rmtu);
-				net->max_mtu -= net->max_mtu % 4;
+				net->max_pmtu = max(net->mtu, rmtu);
+				net->max_pmtu -= net->max_pmtu % 4;
 			}
 			net->got_max = 1;
 		}
@@ -4180,24 +4180,24 @@ sctp_add_remote_addr(struct sctp_tcb *stcb, struct sockaddr *newaddr,
 		    stcb->asoc.primary_destination, sctp_next);
 	}
 	if (stcb->asoc.plpmtud_supported) {
-		net->probing_state = SCTP_PROBE_NONE;
-		net->probe_mtu = 0;
+		net->probing_state = SCTP_PROBE_DISABLED;
+		net->probed_size = 0;
 		if (from == SCTP_ADDR_DYNAMIC_ADDED) {
 			net->probing_state = SCTP_PROBE_BASE;
 #ifdef INET
 			if (newaddr->sa_family == AF_INET) {
-				net->probe_mtu = SCTP_PROBE_MTU_V4_BASE;
+				net->probed_size = SCTP_PROBE_BASE_PMTU_V4;
 			}
 #endif
 #ifdef INET6
 			if (newaddr->sa_family == AF_INET6) {
-				net->probe_mtu = SCTP_PROBE_MTU_V6_BASE;
+				net->probed_size = SCTP_PROBE_BASE_PMTU_V6;
 			}
 #endif
-			net->probed_mtu = SCTP_PROBE_MIN;
+			net->plpmtu = SCTP_PROBE_MIN_PMTU;
 			net->mtu_probing = 1;
-			net->probe_counts = 0;
-			net->mtu = net->probe_mtu;
+			net->probe_count = 0;
+			net->mtu = net->probed_size;
 			sctp_send_a_probe(stcb->sctp_ep, stcb, net);
 		}
 	}

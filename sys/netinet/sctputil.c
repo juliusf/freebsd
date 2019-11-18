@@ -1901,7 +1901,7 @@ sctp_timeout_handler(void *t)
 #ifdef SCTP_AUDITING_ENABLED
 		sctp_auditing(4, inp, stcb, net);
 #endif
-		if (!(net->dest_state & SCTP_ADDR_NOHB)) {
+		if (!(net->dest_state & SCTP_ADDR_NOHB) && !(inp->plpmtud_supported && net->mtu_probing)) {
 			sctp_timer_start(SCTP_TIMER_TYPE_HEARTBEAT, inp, stcb, net);
 			sctp_chunk_output(inp, stcb, SCTP_OUTPUT_FROM_HB_TMR, SCTP_SO_NOT_LOCKED);
 			did_output = true;
@@ -7320,7 +7320,7 @@ sctp_recv_icmp6_tunneled_packet(int cmd, struct sockaddr *sa, void *d, void *ctx
 	 * Check if we can safely examine the ports and the verification tag
 	 * of the SCTP common header.
 	 */
-	if (ip6cp->ip6c_m->m_pkthdr.len <
+	if ((uint64_t) ip6cp->ip6c_m->m_pkthdr.len <
 	    ip6cp->ip6c_off + sizeof(struct udphdr) + offsetof(struct sctphdr, checksum)) {
 		return;
 	}
@@ -7749,9 +7749,9 @@ sctp_make_hb(struct sctp_tcb *stcb, struct sctp_nets *net,int so_locked
 		return NULL;
 	}
 	if (stcb->sctp_ep->plpmtud_supported && net->mtu_probing) {
-		hb->heartbeat.hb_info.probe_mtu = net->probe_mtu;
+		hb->heartbeat.hb_info.probed_size = net->probed_size;
 	} else {
-		hb->heartbeat.hb_info.probe_mtu = 0;
+		hb->heartbeat.hb_info.probed_size = 0;
 	}
 	net->hb_responded = 0;
 	return chk;
@@ -7812,9 +7812,9 @@ sctp_send_a_probe(struct sctp_inpcb *inp,
 	struct sctphdr *sh;
 	sctp_route_t *ro;
 
-	if (!net->mtu_probing && net->probing_state > SCTP_PROBE_NONE) {
+	if (!net->mtu_probing && net->probing_state > SCTP_PROBE_DISABLED) {
 		net->mtu_probing = 1;
-		net->probe_counts = 0;
+		net->probe_count = 0;
 	}
 	if (stcb->sctp_ep->sctp_flags & SCTP_PCB_FLAGS_BOUND_V6) {
 		ovh = SCTP_MIN_OVERHEAD;
@@ -7823,7 +7823,7 @@ sctp_send_a_probe(struct sctp_inpcb *inp,
 	}
 #if defined(INET) || defined(INET6)
 	if (net->port) {
-		net->probe_mtu -= sizeof(struct udphdr);
+		net->probed_size -= sizeof(struct udphdr);
 	}
 #endif
 
@@ -7834,7 +7834,7 @@ sctp_send_a_probe(struct sctp_inpcb *inp,
 	sctp_timer_stop(SCTP_TIMER_TYPE_HEARTBEAT, stcb->sctp_ep, stcb, net, SCTP_FROM_SCTPUTIL + SCTP_LOC_11);
 	sctp_timer_start(SCTP_TIMER_TYPE_HEARTBEAT, stcb->sctp_ep, stcb, net);
 
-	sum_probe_chunks = net->probe_mtu - ovh - sizeof(struct sctp_heartbeat_info_param) - sizeof(struct sctp_chunkhdr);
+	sum_probe_chunks = net->probed_size - ovh - sizeof(struct sctp_heartbeat_info_param) - sizeof(struct sctp_chunkhdr);
 	send_size = sum_probe_chunks;
 	pad = sctp_make_pad(stcb, net, send_size);
 	if (pad == NULL) {

@@ -385,10 +385,10 @@ struct sctp_nets {
 	uint32_t flowid;
 	uint8_t flowtype;
 	uint8_t got_max;
-	uint32_t probe_mtu; /* actual mtu probing size */
-	uint32_t probed_mtu; /* mtu that has last been probed */
-	uint32_t max_mtu;
-	uint16_t probe_counts; /* Counter for the probing attempts */
+	uint32_t probed_size; /* actual mtu probing size */
+	uint32_t plpmtu; /* mtu that has last been probed */
+	uint32_t max_pmtu;
+	uint16_t probe_count; /* Counter for the probing attempts */
 	uint16_t probing_state;
 	uint8_t mtu_probing; /* Flag to indicate whether mtu_probing should be processed */
 };

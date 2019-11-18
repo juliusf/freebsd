@@ -11375,9 +11375,9 @@ sctp_send_hb(struct sctp_tcb *stcb, struct sctp_nets *net, int so_locked)
 		return;
 	}
 	if (stcb->sctp_ep->plpmtud_supported && net->mtu_probing) {
-		hb->heartbeat.hb_info.probe_mtu = net->probe_mtu;
+		hb->heartbeat.hb_info.probed_size = net->probed_size;
 	} else {
-		hb->heartbeat.hb_info.probe_mtu = 0;
+		hb->heartbeat.hb_info.probed_size = 0;
 	}
 	net->hb_responded = 0;
 	TAILQ_INSERT_TAIL(&stcb->asoc.control_send_queue, chk, sctp_next);

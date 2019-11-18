@@ -705,37 +705,37 @@ sctp_handle_heartbeat_ack(struct sctp_heartbeat_chunk *cp,
 		if (r_net->probing_state < SCTP_PROBE_BASE && !r_net->mtu_probing)
 			r_net->mtu_probing = 1;
 		if (r_net->mtu_probing) {
-			if (r_net->probe_counts > 0)
-				r_net->probe_counts = 0;
+			if (r_net->probe_count > 0)
+				r_net->probe_count = 0;
 			switch (r_net->probing_state) {
-			case SCTP_PROBE_NONE:
+			case SCTP_PROBE_DISABLED:
 				r_net->probing_state = SCTP_PROBE_BASE;
-				r_net->probed_mtu = SCTP_PROBE_MIN;
+				r_net->plpmtu = SCTP_PROBE_MIN_PMTU;
 #ifdef INET6
 				if (cp->heartbeat.hb_info.addr_family == AF_INET6) {
-					r_net->probe_mtu = SCTP_PROBE_MTU_V6_BASE;
+					r_net->probed_size = SCTP_PROBE_BASE_PMTU_V6;
 				}
 #endif
 #ifdef INET
 				if (cp->heartbeat.hb_info.addr_family == AF_INET) {
-					r_net->probe_mtu = SCTP_PROBE_MTU_V4_BASE;
+					r_net->probed_size = SCTP_PROBE_BASE_PMTU_V4;
 				}
 #endif
 				sctp_send_a_probe(stcb->sctp_ep, stcb, r_net);
 				break;
 			case SCTP_PROBE_ERROR:
-				r_net->probed_mtu = SCTP_PROBE_MIN;
-				r_net->probe_mtu = sctp_get_next_mtu(SCTP_PROBE_MIN);
+				r_net->plpmtu = SCTP_PROBE_MIN_PMTU;
+				r_net->probed_size = sctp_get_next_mtu(SCTP_PROBE_MIN_PMTU);
 				r_net->probing_state = SCTP_PROBE_SEARCH_UP;
 				sctp_send_a_probe(stcb->sctp_ep, stcb, r_net);
 				break;
 			case SCTP_PROBE_BASE:
-				r_net->probed_mtu = cp->heartbeat.hb_info.probe_mtu;
-				if (r_net->probed_mtu == r_net->max_mtu) {
-					sctp_pathmtu_adjustment(stcb, r_net->probed_mtu, r_net);
+				r_net->plpmtu = cp->heartbeat.hb_info.probed_size;
+				if (r_net->plpmtu == r_net->max_pmtu) {
+					sctp_pathmtu_adjustment(stcb, r_net->plpmtu, r_net);
 					r_net->mtu_probing = 0;
-					r_net->probing_state = SCTP_PROBE_DONE;
-					r_net->mtu = r_net->max_mtu;
+					r_net->probing_state = SCTP_PROBE_SEARCH_COMPLETE;
+					r_net->mtu = r_net->max_pmtu;
 					sctp_timer_stop(SCTP_TIMER_TYPE_HEARTBEAT, stcb->sctp_ep, stcb, r_net, SCTP_FROM_SCTP_INPUT + SCTP_LOC_7);
 					sctp_timer_start(SCTP_TIMER_TYPE_HEARTBEAT, stcb->sctp_ep, stcb, r_net);
 					if (SCTP_OS_TIMER_PENDING(&r_net->pmtu_timer.timer)) {
@@ -747,27 +747,27 @@ sctp_handle_heartbeat_ack(struct sctp_heartbeat_chunk *cp,
 				}
 				if (SCTP_PROBE_UP == 1) {
 					r_net->probing_state = SCTP_PROBE_SEARCH_UP;
-					if (r_net->max_mtu == 0) {
-						r_net->probe_mtu = sctp_get_next_mtu(r_net->probed_mtu);
+					if (r_net->max_pmtu == 0) {
+						r_net->probed_size = sctp_get_next_mtu(r_net->plpmtu);
 					} else {
-						r_net->probe_mtu = min(r_net->max_mtu, sctp_get_next_mtu(r_net->probed_mtu));
+						r_net->probed_size = min(r_net->max_pmtu, sctp_get_next_mtu(r_net->plpmtu));
 					}
 				} else {
 					r_net->probing_state = SCTP_PROBE_SEARCH_DOWN;
-					r_net->probe_mtu = r_net->max_mtu;
+					r_net->probed_size = r_net->max_pmtu;
 				}
-				r_net->mtu = r_net->probed_mtu;
+				r_net->mtu = r_net->plpmtu;
 
-				sctp_pathmtu_adjustment(stcb, r_net->probed_mtu, r_net);
+				sctp_pathmtu_adjustment(stcb, r_net->plpmtu, r_net);
 				sctp_send_a_probe(stcb->sctp_ep, stcb, r_net);
 				break;
 			case SCTP_PROBE_SEARCH_UP:
-				r_net->probed_mtu = cp->heartbeat.hb_info.probe_mtu;
-				if (r_net->probed_mtu == r_net->max_mtu) {
-					r_net->mtu = r_net->max_mtu;
-					sctp_pathmtu_adjustment(stcb, r_net->max_mtu, r_net);
+				r_net->plpmtu = cp->heartbeat.hb_info.probed_size;
+				if (r_net->plpmtu == r_net->max_pmtu) {
+					r_net->mtu = r_net->max_pmtu;
+					sctp_pathmtu_adjustment(stcb, r_net->max_pmtu, r_net);
 					r_net->mtu_probing = 0;
-					r_net->probing_state = SCTP_PROBE_DONE;
+					r_net->probing_state = SCTP_PROBE_SEARCH_COMPLETE;
 					sctp_timer_stop(SCTP_TIMER_TYPE_HEARTBEAT, stcb->sctp_ep, stcb, r_net, SCTP_FROM_SCTP_INPUT + SCTP_LOC_9);
 					sctp_timer_start(SCTP_TIMER_TYPE_HEARTBEAT, stcb->sctp_ep, stcb, r_net);
 					if (SCTP_OS_TIMER_PENDING(&r_net->pmtu_timer.timer)) {
@@ -777,22 +777,22 @@ sctp_handle_heartbeat_ack(struct sctp_heartbeat_chunk *cp,
 					sctp_timer_start(SCTP_TIMER_TYPE_PATHMTURAISE, stcb->sctp_ep, stcb, r_net);
 					break;
 				}
-				next_mtu = sctp_get_next_mtu(r_net->probed_mtu);
-				if (next_mtu > r_net->probe_mtu)
-					r_net->probe_mtu = next_mtu;
-				if (r_net->max_mtu > 0 && next_mtu > r_net->max_mtu) {
-					r_net->probe_mtu = r_net->max_mtu;
+				next_mtu = sctp_get_next_mtu(r_net->plpmtu);
+				if (next_mtu > r_net->probed_size)
+					r_net->probed_size = next_mtu;
+				if (r_net->max_pmtu > 0 && next_mtu > r_net->max_pmtu) {
+					r_net->probed_size = r_net->max_pmtu;
 				}
-				r_net->mtu = r_net->probed_mtu;
-				sctp_pathmtu_adjustment(stcb, r_net->probed_mtu, r_net);
+				r_net->mtu = r_net->plpmtu;
+				sctp_pathmtu_adjustment(stcb, r_net->plpmtu, r_net);
 				sctp_send_a_probe(stcb->sctp_ep, stcb, r_net);
 				break;
 			case SCTP_PROBE_SEARCH_DOWN: /* Highest MTU reached. Stop Probing */
-				r_net->probed_mtu = cp->heartbeat.hb_info.probe_mtu;
-				r_net->mtu = r_net->probed_mtu;
+				r_net->plpmtu = cp->heartbeat.hb_info.probed_size;
+				r_net->mtu = r_net->plpmtu;
 				sctp_pathmtu_adjustment(stcb, r_net->mtu, r_net);
 				r_net->mtu_probing = 0;
-				r_net->probing_state = SCTP_PROBE_DONE;
+				r_net->probing_state = SCTP_PROBE_SEARCH_COMPLETE;
 				sctp_timer_stop(SCTP_TIMER_TYPE_HEARTBEAT, stcb->sctp_ep, stcb, r_net, SCTP_FROM_SCTP_INPUT + SCTP_LOC_11);
 				sctp_timer_start(SCTP_TIMER_TYPE_HEARTBEAT, stcb->sctp_ep, stcb, r_net);
 				if (SCTP_OS_TIMER_PENDING(&r_net->pmtu_timer.timer)) {
@@ -801,7 +801,7 @@ sctp_handle_heartbeat_ack(struct sctp_heartbeat_chunk *cp,
 				}
 				sctp_timer_start(SCTP_TIMER_TYPE_PATHMTURAISE, stcb->sctp_ep, stcb, r_net);
 				break;
-			case SCTP_PROBE_DONE:
+			case SCTP_PROBE_SEARCH_COMPLETE:
 				break;
 			}
 		}
@@ -960,8 +960,8 @@ sctp_start_net_timers(struct sctp_tcb *stcb)
 		if ((net->dest_state & SCTP_ADDR_UNCONFIRMED) &&
 		    (cnt_hb_sent < SCTP_BASE_SYSCTL(sctp_hb_maxburst))) {
 		    if (stcb->asoc.plpmtud_supported) {
-				net->probing_state = SCTP_PROBE_NONE;
-				net->probe_mtu = 0;
+				net->probing_state = SCTP_PROBE_DISABLED;
+				net->probed_size = 0;
 			}
 			sctp_send_hb(stcb, net, SCTP_SO_NOT_LOCKED);
 			cnt_hb_sent++;
@@ -969,17 +969,17 @@ sctp_start_net_timers(struct sctp_tcb *stcb)
 			net->probing_state = SCTP_PROBE_BASE;
 #ifdef INET6
 			if (stcb->asoc.scope.ipv6_addr_legal) {
-				net->probe_mtu = SCTP_PROBE_MTU_V6_BASE;
+				net->probed_size = SCTP_PROBE_BASE_PMTU_V6;
 			}
 #endif
 #ifdef INET
 			if (stcb->asoc.scope.ipv4_addr_legal) {
-				net->probe_mtu = SCTP_PROBE_MTU_V4_BASE;
+				net->probed_size = SCTP_PROBE_BASE_PMTU_V4;
 			}
 #endif
-			net->probed_mtu = SCTP_PROBE_MIN;
+			net->plpmtu = SCTP_PROBE_MIN_PMTU;
 			net->mtu_probing = 1;
-			net->probe_counts = 0;
+			net->probe_count = 0;
 			sctp_send_a_probe(stcb->sctp_ep, stcb, net);
 		}
 	}
