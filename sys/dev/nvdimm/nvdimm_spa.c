@@ -155,6 +155,15 @@ nvdimm_spa_type_from_uuid(struct uuid *uuid)
 	return (SPA_TYPE_UNKNOWN);
 }
 
+bool
+nvdimm_spa_type_user_accessible(enum SPA_mapping_type spa_type)
+{
+
+	if ((int)spa_type < 0 || spa_type >= nitems(nvdimm_SPA_uuid_list))
+		return (false);
+	return (nvdimm_SPA_uuid_list[spa_type].u_usr_acc);
+}
+
 static vm_memattr_t
 nvdimm_spa_memattr(uint64_t efi_mem_flags)
 {
@@ -462,13 +471,13 @@ nvdimm_spa_init(struct SPA_mapping *spa, ACPI_NFIT_SYSTEM_ADDRESS *nfitaddr,
 		return (0);
 
 	asprintf(&name, M_NVDIMM, "spa%d", spa->spa_nfit_idx);
-	error = nvdimm_spa_dev_init(&spa->dev, name);
+	error = nvdimm_spa_dev_init(&spa->dev, name, spa->spa_nfit_idx);
 	free(name, M_NVDIMM);
 	return (error);
 }
 
 int
-nvdimm_spa_dev_init(struct nvdimm_spa_dev *dev, const char *name)
+nvdimm_spa_dev_init(struct nvdimm_spa_dev *dev, const char *name, int unit)
 {
 	struct make_dev_args mda;
 	struct sglist *spa_sg;
@@ -507,6 +516,7 @@ nvdimm_spa_dev_init(struct nvdimm_spa_dev *dev, const char *name)
 	mda.mda_gid = GID_OPERATOR;
 	mda.mda_mode = 0660;
 	mda.mda_si_drv1 = dev;
+	mda.mda_unit = unit;
 	asprintf(&devname, M_NVDIMM, "nvdimm_%s", name);
 	error = make_dev_s(&mda, &dev->spa_dev, "%s", devname);
 	free(devname, M_NVDIMM);

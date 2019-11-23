@@ -168,10 +168,6 @@ SYSCTL_INT(_vm, OID_AUTO, boot_pages, CTLFLAG_RDTUN | CTLFLAG_NOFETCH,
     &boot_pages, 0,
     "number of pages allocated for bootstrapping the VM system");
 
-static int pa_tryrelock_restart;
-SYSCTL_INT(_vm, OID_AUTO, tryrelock_restart, CTLFLAG_RD,
-    &pa_tryrelock_restart, 0, "Number of tryrelock restarts");
-
 static TAILQ_HEAD(, vm_page) blacklist_head;
 static int sysctl_vm_page_blacklist(SYSCTL_HANDLER_ARGS);
 SYSCTL_PROC(_vm, OID_AUTO, page_blacklist, CTLTYPE_STRING | CTLFLAG_RD |
@@ -220,26 +216,28 @@ vm_page_init_cache_zones(void *dummy __unused)
 {
 	struct vm_domain *vmd;
 	struct vm_pgcache *pgcache;
-	int domain, pool;
+	int cache, domain, maxcache, pool;
 
+	maxcache = 0;
+	TUNABLE_INT_FETCH("vm.pgcache_zone_max", &maxcache);
 	for (domain = 0; domain < vm_ndomains; domain++) {
 		vmd = VM_DOMAIN(domain);
-
-		/*
-		 * Don't allow the page caches to take up more than .25% of
-		 * memory.
-		 */
-		if (vmd->vmd_page_count / 400 < 256 * mp_ncpus * VM_NFREEPOOL)
-			continue;
 		for (pool = 0; pool < VM_NFREEPOOL; pool++) {
 			pgcache = &vmd->vmd_pgcache[pool];
 			pgcache->domain = domain;
 			pgcache->pool = pool;
 			pgcache->zone = uma_zcache_create("vm pgcache",
-			    sizeof(struct vm_page), NULL, NULL, NULL, NULL,
+			    PAGE_SIZE, NULL, NULL, NULL, NULL,
 			    vm_page_zone_import, vm_page_zone_release, pgcache,
-			    UMA_ZONE_MAXBUCKET | UMA_ZONE_VM);
-			(void)uma_zone_set_maxcache(pgcache->zone, 0);
+			    UMA_ZONE_VM);
+
+			/*
+			 * Limit each pool's zone to 0.1% of the pages in the
+			 * domain.
+			 */
+			cache = maxcache != 0 ? maxcache :
+			    vmd->vmd_page_count / 1000;
+			uma_zone_set_maxcache(pgcache->zone, cache);
 		}
 	}
 }
@@ -251,34 +249,6 @@ SYSINIT(vm_page2, SI_SUB_VM_CONF, SI_ORDER_ANY, vm_page_init_cache_zones, NULL);
 CTASSERT(sizeof(u_long) >= 8);
 #endif
 #endif
-
-/*
- * Try to acquire a physical address lock while a pmap is locked.  If we
- * fail to trylock we unlock and lock the pmap directly and cache the
- * locked pa in *locked.  The caller should then restart their loop in case
- * the virtual to physical mapping has changed.
- */
-int
-vm_page_pa_tryrelock(pmap_t pmap, vm_paddr_t pa, vm_paddr_t *locked)
-{
-	vm_paddr_t lockpa;
-
-	lockpa = *locked;
-	*locked = pa;
-	if (lockpa) {
-		PA_LOCK_ASSERT(lockpa, MA_OWNED);
-		if (PA_LOCKPTR(pa) == PA_LOCKPTR(lockpa))
-			return (0);
-		PA_UNLOCK(lockpa);
-	}
-	if (PA_TRYLOCK(pa))
-		return (0);
-	PMAP_UNLOCK(pmap);
-	atomic_add_int(&pa_tryrelock_restart, 1);
-	PA_LOCK(pa);
-	PMAP_LOCK(pmap);
-	return (EAGAIN);
-}
 
 /*
  *	vm_set_page_size:
@@ -461,7 +431,7 @@ sysctl_vm_page_blacklist(SYSCTL_HANDLER_ARGS)
  * Nonetheless, it write busies the page as a safety precaution.
  */
 static void
-vm_page_init_marker(vm_page_t marker, int queue, uint8_t aflags)
+vm_page_init_marker(vm_page_t marker, int queue, uint16_t aflags)
 {
 
 	bzero(marker, sizeof(*marker));
@@ -930,9 +900,11 @@ vm_page_busy_acquire(vm_page_t m, int allocflags)
 		    (allocflags & VM_ALLOC_SBUSY) != 0, locked);
 		if (locked)
 			VM_OBJECT_WLOCK(obj);
-		MPASS(m->object == obj || m->object == NULL);
 		if ((allocflags & VM_ALLOC_WAITFAIL) != 0)
 			return (FALSE);
+		KASSERT(m->object == obj || m->object == NULL,
+		    ("vm_page_busy_acquire: page %p does not belong to %p",
+		    m, obj));
 	}
 }
 
@@ -1079,8 +1051,10 @@ _vm_page_busy_sleep(vm_object_t obj, vm_page_t m, const char *wmesg,
 	}
 	if (locked)
 		VM_OBJECT_DROP(obj);
+	DROP_GIANT();
 	sleepq_add(m, NULL, wmesg, 0, 0);
 	sleepq_wait(m, PVM);
+	PICKUP_GIANT();
 }
 
 /*
@@ -1547,7 +1521,7 @@ vm_page_insert_radixdone(vm_page_t m, vm_object_t object, vm_page_t mpred)
 
 	/*
 	 * Since we are inserting a new and possibly dirty page,
-	 * update the object's OBJ_MIGHTBEDIRTY flag.
+	 * update the object's generation count.
 	 */
 	if (pmap_page_is_write_mapped(m))
 		vm_object_set_writeable_dirty(object);
@@ -1717,7 +1691,8 @@ vm_page_replace(vm_page_t mnew, vm_object_t object, vm_pindex_t pindex)
 
 	/*
 	 * The object's resident_page_count does not change because we have
-	 * swapped one page for another, but OBJ_MIGHTBEDIRTY.
+	 * swapped one page for another, but the generation count should
+	 * change if the page is dirty.
 	 */
 	if (pmap_page_is_write_mapped(mnew))
 		vm_object_set_writeable_dirty(object);
@@ -1854,21 +1829,14 @@ vm_page_alloc_after(vm_object_t object, vm_pindex_t pindex,
  * Returns true if the number of free pages exceeds the minimum
  * for the request class and false otherwise.
  */
-int
-vm_domain_allocate(struct vm_domain *vmd, int req, int npages)
+static int
+_vm_domain_allocate(struct vm_domain *vmd, int req_class, int npages)
 {
 	u_int limit, old, new;
 
-	req = req & VM_ALLOC_CLASS_MASK;
-
-	/*
-	 * The page daemon is allowed to dig deeper into the free page list.
-	 */
-	if (curproc == pageproc && req != VM_ALLOC_INTERRUPT)
-		req = VM_ALLOC_SYSTEM;
-	if (req == VM_ALLOC_INTERRUPT)
+	if (req_class == VM_ALLOC_INTERRUPT)
 		limit = 0;
-	else if (req == VM_ALLOC_SYSTEM)
+	else if (req_class == VM_ALLOC_SYSTEM)
 		limit = vmd->vmd_interrupt_free_min;
 	else
 		limit = vmd->vmd_free_reserved;
@@ -1894,6 +1862,20 @@ vm_domain_allocate(struct vm_domain *vmd, int req, int npages)
 		vm_domain_set(vmd);
 
 	return (1);
+}
+
+int
+vm_domain_allocate(struct vm_domain *vmd, int req, int npages)
+{
+	int req_class;
+
+	/*
+	 * The page daemon is allowed to dig deeper into the free page list.
+	 */
+	req_class = req & VM_ALLOC_CLASS_MASK;
+	if (curproc == pageproc && req_class != VM_ALLOC_INTERRUPT)
+		req_class = VM_ALLOC_SYSTEM;
+	return (_vm_domain_allocate(vmd, req_class, npages));
 }
 
 vm_page_t
@@ -2341,8 +2323,13 @@ vm_page_zone_import(void *arg, void **store, int cnt, int domain, int flags)
 
 	pgcache = arg;
 	vmd = VM_DOMAIN(pgcache->domain);
-	/* Only import if we can bring in a full bucket. */
-	if (cnt == 1 || !vm_domain_allocate(vmd, VM_ALLOC_NORMAL, cnt))
+
+	/*
+	 * The page daemon should avoid creating extra memory pressure since its
+	 * main purpose is to replenish the store of free pages.
+	 */
+	if (vmd->vmd_severeset || curproc == pageproc ||
+	    !_vm_domain_allocate(vmd, VM_ALLOC_NORMAL, cnt))
 		return (0);
 	domain = vmd->vmd_domain;
 	vm_domain_free_lock(vmd);
@@ -3198,7 +3185,7 @@ static inline void
 vm_pqbatch_process_page(struct vm_pagequeue *pq, vm_page_t m)
 {
 	struct vm_domain *vmd;
-	uint8_t qflags;
+	uint16_t qflags;
 
 	CRITICAL_ASSERT(curthread);
 	vm_pagequeue_assert_locked(pq);
@@ -3208,7 +3195,7 @@ vm_pqbatch_process_page(struct vm_pagequeue *pq, vm_page_t m)
 	 * the page queue lock held.  In this case it is about to free the page,
 	 * which must not have any queue state.
 	 */
-	qflags = atomic_load_8(&m->aflags);
+	qflags = atomic_load_16(&m->aflags);
 	KASSERT(pq == vm_page_pagequeue(m) ||
 	    (qflags & PGA_QUEUE_STATE_MASK) == 0,
 	    ("page %p doesn't belong to queue %p but has aflags %#x",
@@ -3444,9 +3431,9 @@ void
 vm_page_dequeue(vm_page_t m)
 {
 	struct vm_pagequeue *pq, *pq1;
-	uint8_t aflags;
+	uint16_t aflags;
 
-	KASSERT(mtx_owned(vm_page_lockptr(m)) || m->object == NULL,
+	KASSERT(mtx_owned(vm_page_lockptr(m)) || m->ref_count == 0,
 	    ("page %p is allocated and unlocked", m));
 
 	for (pq = vm_page_pagequeue(m);; pq = pq1) {
@@ -3456,7 +3443,7 @@ vm_page_dequeue(vm_page_t m)
 			 * vm_page_dequeue_complete().  Ensure that all queue
 			 * state is cleared before we return.
 			 */
-			aflags = atomic_load_8(&m->aflags);
+			aflags = atomic_load_16(&m->aflags);
 			if ((aflags & PGA_QUEUE_STATE_MASK) == 0)
 				return;
 			KASSERT((aflags & PGA_DEQUEUE) != 0,
@@ -3500,6 +3487,8 @@ vm_page_enqueue(vm_page_t m, uint8_t queue)
 	vm_page_assert_locked(m);
 	KASSERT(m->queue == PQ_NONE && (m->aflags & PGA_QUEUE_STATE_MASK) == 0,
 	    ("%s: page %p is already enqueued", __func__, m));
+	KASSERT(m->ref_count > 0,
+	    ("%s: page %p does not carry any references", __func__, m));
 
 	m->queue = queue;
 	if ((m->aflags & PGA_REQUEUE) == 0)
@@ -3521,6 +3510,8 @@ vm_page_requeue(vm_page_t m)
 	vm_page_assert_locked(m);
 	KASSERT(vm_page_queue(m) != PQ_NONE,
 	    ("%s: page %p is not logically enqueued", __func__, m));
+	KASSERT(m->ref_count > 0,
+	    ("%s: page %p does not carry any references", __func__, m));
 
 	if ((m->aflags & PGA_REQUEUE) == 0)
 		vm_page_aflag_set(m, PGA_REQUEUE);
@@ -3788,6 +3779,9 @@ vm_page_wire(vm_page_t m)
 /*
  * Attempt to wire a mapped page following a pmap lookup of that page.
  * This may fail if a thread is concurrently tearing down mappings of the page.
+ * The transient failure is acceptable because it translates to the
+ * failure of the caller pmap_extract_and_hold(), which should be then
+ * followed by the vm_fault() fallback, see e.g. vm_fault_quick_hold_pages().
  */
 bool
 vm_page_wire_mapped(vm_page_t m)
@@ -3911,6 +3905,8 @@ vm_page_mvqueue(vm_page_t m, const uint8_t nqueue)
 	vm_page_assert_locked(m);
 	KASSERT((m->oflags & VPO_UNMANAGED) == 0,
 	    ("vm_page_mvqueue: page %p is unmanaged", m));
+	KASSERT(m->ref_count > 0,
+	    ("%s: page %p does not carry any references", __func__, m));
 
 	if (vm_page_queue(m) != nqueue) {
 		vm_page_dequeue(m);
@@ -4541,7 +4537,7 @@ vm_page_bits(int base, int size)
 	    ((vm_page_bits_t)1 << first_bit));
 }
 
-static inline void
+void
 vm_page_bits_set(vm_page_t m, vm_page_bits_t *bits, vm_page_bits_t set)
 {
 
@@ -5028,7 +5024,7 @@ vm_page_object_busy_assert(vm_page_t m)
 }
 
 void
-vm_page_assert_pga_writeable(vm_page_t m, uint8_t bits)
+vm_page_assert_pga_writeable(vm_page_t m, uint16_t bits)
 {
 
 	if ((bits & PGA_WRITEABLE) == 0)

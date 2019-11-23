@@ -29,6 +29,7 @@
  */
 
 #include "opt_acpi.h"
+#include "opt_ddb.h"
 #include "opt_kstack_pages.h"
 #include "opt_platform.h"
 
@@ -39,6 +40,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/systm.h>
 #include <sys/bus.h>
 #include <sys/cpu.h>
+#include <sys/csan.h>
 #include <sys/kernel.h>
 #include <sys/ktr.h>
 #include <sys/malloc.h>
@@ -53,8 +55,10 @@ __FBSDID("$FreeBSD$");
 #include <vm/pmap.h>
 #include <vm/vm_extern.h>
 #include <vm/vm_kern.h>
+#include <vm/vm_map.h>
 
 #include <machine/machdep.h>
+#include <machine/debug_monitor.h>
 #include <machine/intr.h>
 #include <machine/smp.h>
 #ifdef VFP
@@ -190,6 +194,7 @@ void
 init_secondary(uint64_t cpu)
 {
 	struct pcpu *pcpup;
+	pmap_t pmap0;
 
 	pcpup = &__pcpu[cpu];
 	/*
@@ -208,6 +213,12 @@ init_secondary(uint64_t cpu)
 	KASSERT(PCPU_GET(idlethread) != NULL, ("no idle thread"));
 	pcpup->pc_curthread = pcpup->pc_idlethread;
 	pcpup->pc_curpcb = pcpup->pc_idlethread->td_pcb;
+
+	/* Initialize curpmap to match TTBR0's current setting. */
+	pmap0 = vmspace_pmap(&vmspace0);
+	KASSERT(pmap_to_ttbr0(pmap0) == READ_SPECIALREG(ttbr0_el1),
+	    ("pmap0 doesn't match cpu %ld's ttbr0", cpu));
+	pcpup->pc_curpmap = pmap0;
 
 	/*
 	 * Identify current CPU. This is necessary to setup
@@ -242,6 +253,8 @@ init_secondary(uint64_t cpu)
 	}
 
 	mtx_unlock_spin(&ap_boot_mtx);
+
+	kcsan_cpu_init(cpu);
 
 	/* Enter the scheduler */
 	sched_throw(NULL);
@@ -352,6 +365,10 @@ ipi_stop(void *dummy __unused)
 	/* Wait for restart */
 	while (!CPU_ISSET(cpu, &started_cpus))
 		cpu_spinwait();
+
+#ifdef DDB
+	dbg_register_sync(NULL);
+#endif
 
 	CPU_CLR_ATOMIC(cpu, &started_cpus);
 	CPU_CLR_ATOMIC(cpu, &stopped_cpus);

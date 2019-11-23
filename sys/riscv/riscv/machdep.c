@@ -123,12 +123,12 @@ uint32_t boot_hart;	/* The hart we booted on. */
 cpuset_t all_harts;
 
 extern int *end;
-extern int *initstack_end;
 
 static void
 cpu_startup(void *dummy)
 {
 
+	sbi_print_version();
 	identify_cpu();
 
 	printf("real memory  = %ju (%ju MB)\n", ptoa((uintmax_t)realmem),
@@ -658,7 +658,9 @@ init_proc0(vm_offset_t kstack)
 
 	proc_linkup0(&proc0, &thread0);
 	thread0.td_kstack = kstack;
-	thread0.td_pcb = (struct pcb *)(thread0.td_kstack) - 1;
+	thread0.td_kstack_pages = KSTACK_PAGES;
+	thread0.td_pcb = (struct pcb *)(thread0.td_kstack +
+	    thread0.td_kstack_pages * PAGE_SIZE) - 1;
 	thread0.td_pcb->pcb_fpflags = 0;
 	thread0.td_frame = &proc0_tf;
 	pcpup->pc_curpcb = thread0.td_pcb;
@@ -848,6 +850,9 @@ initriscv(struct riscv_bootparams *rvbp)
 	__asm __volatile("mv tp, %0" :: "r"(pcpup));
 
 	PCPU_SET(curthread, &thread0);
+
+	/* Initialize SBI interface. */
+	sbi_init();
 
 	/* Set the module data location */
 	lastaddr = fake_preload_metadata(rvbp);

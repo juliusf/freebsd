@@ -256,7 +256,6 @@ void make_dev_args_init_impl(struct make_dev_args *_args, size_t _sz);
 #define	make_dev_args_init(a) \
     make_dev_args_init_impl((a), sizeof(struct make_dev_args))
 	
-int	count_dev(struct cdev *_dev);
 void	delist_dev(struct cdev *_dev);
 void	destroy_dev(struct cdev *_dev);
 int	destroy_dev_sched(struct cdev *dev);
@@ -365,6 +364,10 @@ struct diocskerneldump_arg;
 int dumper_insert(const struct dumperinfo *di_template, const char *devname,
     const struct diocskerneldump_arg *kda);
 int dumper_remove(const char *devname, const struct diocskerneldump_arg *kda);
+
+/* For ddb(4)-time use only. */
+void dumper_ddb_insert(struct dumperinfo *);
+void dumper_ddb_remove(struct dumperinfo *);
 
 int dump_start(struct dumperinfo *di, struct kerneldumpheader *kdh);
 int dump_append(struct dumperinfo *, void *, vm_offset_t, size_t);

@@ -239,6 +239,9 @@ sanity_check_currdev(void)
 	struct stat st;
 
 	return (stat(PATH_DEFAULTS_LOADER_CONF, &st) == 0 ||
+#ifdef PATH_BOOTABLE_TOKEN
+	    stat(PATH_BOOTABLE_TOKEN, &st) == 0 || /* non-standard layout */
+#endif
 	    stat(PATH_KERNEL, &st) == 0);
 }
 
@@ -685,7 +688,7 @@ setenv_int(const char *key, int val)
  * ACPI name space to map the UID for the serial port to a port. The
  * latter is especially hard.
  */
-static int
+int
 parse_uefi_con_out(void)
 {
 	int how, rv;
@@ -700,8 +703,11 @@ parse_uefi_con_out(void)
 	how = 0;
 	sz = sizeof(buf);
 	rv = efi_global_getenv("ConOut", buf, &sz);
-	if (rv != EFI_SUCCESS)
+	if (rv != EFI_SUCCESS) {
+		/* If we don't have any ConOut default to serial */
+		how = RB_SERIAL;
 		goto out;
+	}
 	ep = buf + sz;
 	node = (EFI_DEVICE_PATH *)buf;
 	while ((char *)node < ep) {
@@ -860,6 +866,9 @@ main(int argc, CHAR16 *argv[])
 	archsw.arch_getdev = efi_getdev;
 	archsw.arch_copyin = efi_copyin;
 	archsw.arch_copyout = efi_copyout;
+#ifdef __amd64__
+	archsw.arch_hypervisor = x86_hypervisor;
+#endif
 	archsw.arch_readin = efi_readin;
 	archsw.arch_zfs_probe = efi_zfs_probe;
 

@@ -106,12 +106,15 @@ options 	VERBOSE_SYSINIT=0	# Support debug.verbose_sysinit, off by default
 #options 	KCOV			# Kernel Coverage Sanitizer
 # Warning: KUBSAN can result in a kernel too large for loader to load
 #options 	KUBSAN			# Kernel Undefined Behavior Sanitizer
+#options 	KCSAN			# Kernel Concurrency Sanitizer
 
 # Kernel dump features.
 options 	EKCD			# Support for encrypted kernel dumps
 options 	GZIO			# gzip-compressed kernel and user dumps
 options 	ZSTDIO			# zstd-compressed kernel and user dumps
+options 	DEBUGNET		# debugnet networking
 options 	NETDUMP			# netdump(4) client support
+options 	NETGDB			# netgdb(4) client support
 
 # Make an SMP-capable kernel by default
 options 	SMP			# Symmetric MultiProcessor Kernel
@@ -150,6 +153,7 @@ device		sym			# NCR/Symbios Logic
 device		trm			# Tekram DC395U/UW/F DC315U adapters
 device		isci			# Intel C600 SAS controller
 device		ocs_fc			# Emulex FC adapters
+device		pvscsi			# VMware PVSCSI
 
 # ATA/SCSI peripherals
 device		scbus			# SCSI bus (required for ATA/SCSI)

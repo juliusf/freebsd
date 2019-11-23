@@ -968,7 +968,7 @@ static	int softdep_count_dependencies(struct buf *bp, int);
  * Global lock over all of soft updates.
  */
 static struct mtx lk;
-MTX_SYSINIT(softdep_lock, &lk, "Global Softdep Lock", MTX_DEF);
+MTX_SYSINIT(softdep_lock, &lk, "global softdep", MTX_DEF);
 
 #define ACQUIRE_GBLLOCK(lk)	mtx_lock(lk)
 #define FREE_GBLLOCK(lk)	mtx_unlock(lk)
@@ -2491,7 +2491,7 @@ softdep_mount(devvp, mp, fs, cred)
 	ump = VFSTOUFS(mp);
 	ump->um_softdep = sdp;
 	MNT_IUNLOCK(mp);
-	rw_init(LOCK_PTR(ump), "Per-Filesystem Softdep Lock");
+	rw_init(LOCK_PTR(ump), "per-fs softdep");
 	sdp->sd_ump = ump;
 	LIST_INIT(&ump->softdep_workitem_pending);
 	LIST_INIT(&ump->softdep_journal_pending);
@@ -9587,6 +9587,11 @@ initiate_write_sbdep(sbdep)
 	} else
 		fs->fs_sujfree = 0;
 	bpfs->fs_sujfree = fs->fs_sujfree;
+	/*
+	 * Because we have made changes to the superblock, we need to
+	 * recompute its check-hash.
+	 */
+	bpfs->fs_ckhash = ffs_calc_sbhash(bpfs);
 }
 
 /*
@@ -9665,7 +9670,7 @@ clear_unlinked_inodedep(inodedep)
 	struct ufsmount *ump;
 	struct inodedep *idp;
 	struct inodedep *idn;
-	struct fs *fs;
+	struct fs *fs, *bpfs;
 	struct buf *bp;
 	ino_t ino;
 	ino_t nino;
@@ -9762,9 +9767,14 @@ clear_unlinked_inodedep(inodedep)
 		 */
 		if (pino == 0) {
 			bcopy((caddr_t)fs, bp->b_data, (u_int)fs->fs_sbsize);
-			ffs_oldfscompat_write((struct fs *)bp->b_data, ump);
-			softdep_setup_sbupdate(ump, (struct fs *)bp->b_data,
-			    bp);
+			bpfs = (struct fs *)bp->b_data;
+			ffs_oldfscompat_write(bpfs, ump);
+			softdep_setup_sbupdate(ump, bpfs, bp);
+			/*
+			 * Because we may have made changes to the superblock,
+			 * we need to recompute its check-hash.
+			 */
+			bpfs->fs_ckhash = ffs_calc_sbhash(bpfs);
 		} else if (fs->fs_magic == FS_UFS1_MAGIC) {
 			((struct ufs1_dinode *)bp->b_data +
 			    ino_to_fsbo(fs, pino))->di_freelink = nino;
@@ -9789,9 +9799,14 @@ clear_unlinked_inodedep(inodedep)
 			bp = getblk(ump->um_devvp, btodb(fs->fs_sblockloc),
 			    (int)fs->fs_sbsize, 0, 0, 0);
 			bcopy((caddr_t)fs, bp->b_data, (u_int)fs->fs_sbsize);
-			ffs_oldfscompat_write((struct fs *)bp->b_data, ump);
-			softdep_setup_sbupdate(ump, (struct fs *)bp->b_data,
-			    bp);
+			bpfs = (struct fs *)bp->b_data;
+			ffs_oldfscompat_write(bpfs, ump);
+			softdep_setup_sbupdate(ump, bpfs, bp);
+			/*
+			 * Because we may have made changes to the superblock,
+			 * we need to recompute its check-hash.
+			 */
+			bpfs->fs_ckhash = ffs_calc_sbhash(bpfs);
 			bwrite(bp);
 			ACQUIRE_LOCK(ump);
 		}
@@ -9866,6 +9881,9 @@ handle_workitem_remove(dirrem, flags)
 	 */
 	if ((dirrem->dm_state & RMDIR) == 0) {
 		ip->i_nlink--;
+		KASSERT(ip->i_nlink >= 0, ("handle_workitem_remove: file ino "
+		    "%ju negative i_nlink %d", (intmax_t)ip->i_number,
+		    ip->i_nlink));
 		DIP_SET(ip, i_nlink, ip->i_nlink);
 		ip->i_flag |= IN_CHANGE;
 		if (ip->i_nlink < ip->i_effnlink)
@@ -9887,6 +9905,8 @@ handle_workitem_remove(dirrem, flags)
 	 * to account for the loss of "..".
 	 */
 	ip->i_nlink -= 2;
+	KASSERT(ip->i_nlink >= 0, ("handle_workitem_remove: directory ino "
+	    "%ju negative i_nlink %d", (intmax_t)ip->i_number, ip->i_nlink));
 	DIP_SET(ip, i_nlink, ip->i_nlink);
 	ip->i_flag |= IN_CHANGE;
 	if (ip->i_nlink < ip->i_effnlink)
@@ -10786,7 +10806,6 @@ softdep_setup_inofree(mp, bp, ino, wkhd)
 	}
 	FREE_LOCK(ump);
 }
-
 
 /*
  * Called via ffs_blkfree() after a set of frags has been cleared from a cg
@@ -12250,6 +12269,8 @@ softdep_load_inodeblock(ip)
 		return;
 	}
 	ip->i_effnlink -= inodedep->id_nlinkdelta;
+	KASSERT(ip->i_effnlink >= 0,
+	    ("softdep_load_inodeblock: negative i_effnlink"));
 	FREE_LOCK(ump);
 }
 
@@ -13414,9 +13435,9 @@ softdep_request_cleanup(fs, vp, cred, resource)
 			    roundup((fs->fs_dsize * fs->fs_minfree / 100) -
 			    fs->fs_cstotal.cs_nffree, fs->fs_frag));
 	} else {
-		UFS_LOCK(ump);
 		printf("softdep_request_cleanup: Unknown resource type %d\n",
 		    resource);
+		UFS_LOCK(ump);
 		return (0);
 	}
 	starttime = time_second;

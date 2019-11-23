@@ -1038,9 +1038,17 @@ options 	TCP_SIGNATURE		#include support for RFC 2385
 # a smooth scheduling of the traffic.
 options 	DUMMYNET
 
+# The DEBUGNET option enables a basic debug/panic-time networking API.  It
+# is used by NETDUMP and NETGDB.
+options 	DEBUGNET
+
 # The NETDUMP option enables netdump(4) client support in the kernel.
 # This allows a panicking kernel to transmit a kernel dump to a remote host.
 options 	NETDUMP
+
+# The NETGDB option enables netgdb(4) support in the kernel.  This allows a
+# panicking kernel to be debugged as a GDB remote over the network.
+options 	NETGDB
 
 #####################################################################
 # FILESYSTEM OPTIONS
@@ -1345,6 +1353,7 @@ device		ctl		#CAM Target Layer
 # CAM_DEBUG_TARGET	Limit debugging to the given target.
 # CAM_DEBUG_LUN		Limit debugging to the given lun.
 # CAM_DEBUG_DELAY	Delay in us after printing each debug line.
+# CAM_IO_STATS		Publish additional CAM device statics by sysctl
 #
 # CAM_MAX_HIGHPOWER: Maximum number of concurrent high power (start unit) cmds
 # SCSI_NO_SENSE_STRINGS: When defined disables sense descriptions
@@ -1366,6 +1375,7 @@ options 	SCSI_NO_SENSE_STRINGS
 options 	SCSI_NO_OP_STRINGS
 options 	SCSI_DELAY=5000	# Be pessimistic about Joe SCSI device
 options 	CAM_IOSCHED_DYNAMIC
+options		CAM_IO_STATS
 options		CAM_TEST_FAILURE
 
 # Options for the CAM CDROM driver:
@@ -2888,3 +2898,6 @@ options 	SPIGEN_LEGACY_CDEVNAME # legacy device names for spigen
 # Compression supports.
 device		zlib		# gzip/zlib compression/decompression library
 device		xz		# xz_embedded LZMA de-compression library
+
+# Kernel support for stats(3).
+options 	STATS

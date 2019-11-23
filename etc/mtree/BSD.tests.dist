@@ -384,6 +384,8 @@
         ..
         libdevdctl
         ..
+        libexecinfo
+        ..
         libkvm
         ..
         libmp
@@ -792,6 +794,10 @@
         ..
         netinet
         ..
+        netinet6
+            frag6
+            ..
+        ..
         netipsec
             tunnel
             ..
@@ -1057,6 +1063,8 @@
         uudecode
         ..
         uuencode
+        ..
+        unifdef
         ..
         uniq
         ..

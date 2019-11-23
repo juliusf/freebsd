@@ -124,12 +124,12 @@ act_open_failure_cleanup(struct adapter *sc, u_int atid, u_int status)
 
 	CURVNET_SET(toep->vnet);
 	if (status != EAGAIN)
-		INP_INFO_RLOCK_ET(&V_tcbinfo, et);
+		NET_EPOCH_ENTER(et);
 	INP_WLOCK(inp);
 	toe_connect_failed(tod, inp, status);
 	final_cpl_received(toep);	/* unlocks inp */
 	if (status != EAGAIN)
-		INP_INFO_RUNLOCK_ET(&V_tcbinfo, et);
+		NET_EPOCH_EXIT(et);
 	CURVNET_RESTORE();
 }
 
@@ -254,6 +254,8 @@ t4_connect(struct toedev *tod, struct socket *so, struct rtentry *rt,
 	} else if (rt_ifp->if_type == IFT_IEEE8023ADLAG)
 		DONT_OFFLOAD_ACTIVE_OPEN(ENOSYS); /* XXX: implement lagg+TOE */
 	else
+		DONT_OFFLOAD_ACTIVE_OPEN(ENOTSUP);
+	if (sc->flags & KERN_TLS_OK)
 		DONT_OFFLOAD_ACTIVE_OPEN(ENOTSUP);
 
 	rw_rlock(&sc->policy_lock);

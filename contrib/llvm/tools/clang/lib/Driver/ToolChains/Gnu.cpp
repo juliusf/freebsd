@@ -819,7 +819,8 @@ void tools::gnutools::Assembler::ConstructJob(Compilation &C,
       A->render(Args, CmdArgs);
     } else if (mips::shouldUseFPXX(
                    Args, getToolChain().getTriple(), CPUName, ABIName,
-                   mips::getMipsFloatABI(getToolChain().getDriver(), Args)))
+                   mips::getMipsFloatABI(getToolChain().getDriver(), Args,
+                                         getToolChain().getTriple())))
       CmdArgs.push_back("-mfpxx");
 
     // Pass on -mmips16 or -mno-mips16. However, the assembler equivalent of
@@ -1391,7 +1392,8 @@ bool clang::driver::findMIPSMultilibs(const Driver &D,
   addMultilibFlag(CPUName == "mips32r6", "march=mips32r6", Flags);
   addMultilibFlag(CPUName == "mips64", "march=mips64", Flags);
   addMultilibFlag(CPUName == "mips64r2" || CPUName == "mips64r3" ||
-                      CPUName == "mips64r5" || CPUName == "octeon",
+                      CPUName == "mips64r5" || CPUName == "octeon" ||
+                      CPUName == "octeon+",
                   "march=mips64r2", Flags);
   addMultilibFlag(CPUName == "mips64r6", "march=mips64r6", Flags);
   addMultilibFlag(isMicroMips(Args), "mmicromips", Flags);

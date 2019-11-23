@@ -1459,11 +1459,19 @@ vlan_config(struct ifvlan *ifv, struct ifnet *p, uint16_t vid)
 	 * Set up our interface address to reflect the underlying
 	 * physical interface's.
 	 */
-	bcopy(IF_LLADDR(p), IF_LLADDR(ifp), p->if_addrlen);
+	TASK_INIT(&ifv->lladdr_task, 0, vlan_lladdr_fn, ifv);
 	((struct sockaddr_dl *)ifp->if_addr->ifa_addr)->sdl_alen =
 	    p->if_addrlen;
 
-	TASK_INIT(&ifv->lladdr_task, 0, vlan_lladdr_fn, ifv);
+	/*
+	 * Do not schedule link address update if it was the same
+	 * as previous parent's. This helps avoid updating for each
+	 * associated llentry.
+	 */
+	if (memcmp(IF_LLADDR(p), IF_LLADDR(ifp), p->if_addrlen) != 0) {
+		bcopy(IF_LLADDR(p), IF_LLADDR(ifp), p->if_addrlen);
+		taskqueue_enqueue(taskqueue_thread, &ifv->lladdr_task);
+	}
 
 	/* We are ready for operation now. */
 	ifp->if_drv_flags |= IFF_DRV_RUNNING;
@@ -1625,14 +1633,16 @@ vlan_setflags(struct ifnet *ifp, int status)
 static void
 vlan_link_state(struct ifnet *ifp)
 {
+	struct epoch_tracker et;
 	struct ifvlantrunk *trunk;
 	struct ifvlan *ifv;
 
-	NET_EPOCH_ASSERT();
-
+	NET_EPOCH_ENTER(et);
 	trunk = ifp->if_vlantrunk;
-	if (trunk == NULL)
+	if (trunk == NULL) {
+		NET_EPOCH_EXIT(et);
 		return;
+	}
 
 	TRUNK_WLOCK(trunk);
 	VLAN_FOREACH(ifv, trunk) {
@@ -1641,6 +1651,7 @@ vlan_link_state(struct ifnet *ifp)
 		    trunk->parent->if_link_state);
 	}
 	TRUNK_WUNLOCK(trunk);
+	NET_EPOCH_EXIT(et);
 }
 
 static void
@@ -1770,6 +1781,7 @@ vlan_capabilities(struct ifvlan *ifv)
 static void
 vlan_trunk_capabilities(struct ifnet *ifp)
 {
+	struct epoch_tracker et;
 	struct ifvlantrunk *trunk;
 	struct ifvlan *ifv;
 
@@ -1779,8 +1791,10 @@ vlan_trunk_capabilities(struct ifnet *ifp)
 		VLAN_SUNLOCK();
 		return;
 	}
+	NET_EPOCH_ENTER(et);
 	VLAN_FOREACH(ifv, trunk)
 		vlan_capabilities(ifv);
+	NET_EPOCH_EXIT(et);
 	VLAN_SUNLOCK();
 }
 

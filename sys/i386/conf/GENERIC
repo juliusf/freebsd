@@ -99,7 +99,9 @@ options 	VERBOSE_SYSINIT=0	# Support debug.verbose_sysinit, off by default
 options 	EKCD			# Support for encrypted kernel dumps
 options 	GZIO			# gzip-compressed kernel and user dumps
 options 	ZSTDIO			# zstd-compressed kernel and user dumps
+options 	DEBUGNET		# debugnet networking
 options 	NETDUMP			# netdump(4) client support
+options 	NETGDB			# netgdb(4) client support
 
 # To make an SMP kernel, the next two lines are needed
 options 	SMP			# Symmetric MultiProcessor Kernel
@@ -136,6 +138,7 @@ device		mpr			# LSI-Logic MPT-Fusion 3
 device		sym			# NCR/Symbios Logic
 device		trm			# Tekram DC395U/UW/F DC315U adapters
 device		isci			# Intel C600 SAS controller
+device		pvscsi			# VMware PVSCSI
 
 # ATA/SCSI peripherals
 device		scbus			# SCSI bus (required for ATA/SCSI)

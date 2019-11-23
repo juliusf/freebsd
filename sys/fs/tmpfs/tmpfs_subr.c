@@ -273,8 +273,7 @@ tmpfs_alloc_node(struct mount *mp, struct tmpfs_mount *tmp, enum vtype type,
 			NULL /* XXXKIB - tmpfs needs swap reservation */);
 		VM_OBJECT_WLOCK(obj);
 		/* OBJ_TMPFS is set together with the setting of vp->v_object */
-		vm_object_set_flag(obj, OBJ_NOSPLIT | OBJ_TMPFS_NODE);
-		vm_object_clear_flag(obj, OBJ_ONEMAPPING);
+		vm_object_set_flag(obj, OBJ_TMPFS_NODE);
 		VM_OBJECT_WUNLOCK(obj);
 		break;
 
@@ -1477,10 +1476,10 @@ tmpfs_check_mtime(struct vnode *vp)
 	KASSERT((obj->flags & (OBJ_TMPFS_NODE | OBJ_TMPFS)) ==
 	    (OBJ_TMPFS_NODE | OBJ_TMPFS), ("non-tmpfs obj"));
 	/* unlocked read */
-	if ((obj->flags & OBJ_TMPFS_DIRTY) != 0) {
+	if (obj->generation != obj->cleangeneration) {
 		VM_OBJECT_WLOCK(obj);
-		if ((obj->flags & OBJ_TMPFS_DIRTY) != 0) {
-			obj->flags &= ~OBJ_TMPFS_DIRTY;
+		if (obj->generation != obj->cleangeneration) {
+			obj->cleangeneration = obj->generation;
 			node = VP_TO_TMPFS_NODE(vp);
 			node->tn_status |= TMPFS_NODE_MODIFIED |
 			    TMPFS_NODE_CHANGED;

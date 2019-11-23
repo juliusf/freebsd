@@ -184,6 +184,7 @@ SUBDIR=	\
 	${_iser} \
 	isp \
 	${_ispfw} \
+	${_itwd} \
 	${_iwi} \
 	${_iwifw} \
 	${_iwm} \
@@ -598,6 +599,7 @@ _et=		et
 _exca=		exca
 _if_ndis=	if_ndis
 _io=		io
+_itwd=		itwd
 _ix=		ix
 _ixv=		ixv
 .if ${MK_SOURCELESS_UCODE} != "no"
@@ -642,11 +644,11 @@ _ciss=		ciss
 _chromebook_platform=	chromebook_platform
 _cmx=		cmx
 _coretemp=	coretemp
-.if ${MK_SOURCELESS_HOST} != "no"
+.if ${MK_SOURCELESS_HOST} != "no" && empty(KCSAN_ENABLED)
 _hpt27xx=	hpt27xx
 .endif
 _hptiop=	hptiop
-.if ${MK_SOURCELESS_HOST} != "no"
+.if ${MK_SOURCELESS_HOST} != "no" && empty(KCSAN_ENABLED)
 _hptmv=		hptmv
 _hptnr=		hptnr
 _hptrr=		hptrr

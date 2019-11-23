@@ -105,8 +105,9 @@ struct vm_object {
 	struct vm_radix rtree;		/* root of the resident page radix trie*/
 	vm_pindex_t size;		/* Object size */
 	struct domainset_ref domain;	/* NUMA policy. */
-	int generation;			/* generation ID */
-	int ref_count;			/* How many refs?? */
+	volatile int generation;	/* generation ID */
+	int cleangeneration;		/* Generation at clean time */
+	volatile u_int ref_count;	/* How many refs?? */
 	int shadow_count;		/* how many objects that this is a shadow for */
 	vm_memattr_t memattr;		/* default memory attribute for pages */
 	objtype_t type;			/* type of pager */
@@ -184,14 +185,14 @@ struct vm_object {
 #define	OBJ_UNMANAGED	0x0002		/* (c) contains unmanaged pages */
 #define	OBJ_POPULATE	0x0004		/* pager implements populate() */
 #define	OBJ_DEAD	0x0008		/* dead objects (during rundown) */
-#define	OBJ_NOSPLIT	0x0010		/* dont split this object */
+#define	OBJ_ANON	0x0010		/* (c) contains anonymous memory */
 #define	OBJ_UMTXDEAD	0x0020		/* umtx pshared was terminated */
+#define	OBJ_SIZEVNLOCK	0x0040		/* lock vnode to check obj size */
 #define	OBJ_PG_DTOR	0x0080		/* dont reset object, leave that for dtor */
-#define	OBJ_MIGHTBEDIRTY 0x0100		/* object might be dirty, only for vnode */
 #define	OBJ_TMPFS_NODE	0x0200		/* object belongs to tmpfs VREG node */
-#define	OBJ_TMPFS_DIRTY	0x0400		/* dirty tmpfs obj */
 #define	OBJ_COLORED	0x1000		/* pg_color is defined */
 #define	OBJ_ONEMAPPING	0x2000		/* One USE (a single, non-forked) mapping flag */
+#define	OBJ_SHADOWLIST	0x4000		/* Object is on the shadow list. */
 #define	OBJ_TMPFS	0x8000		/* has tmpfs vnode allocated */
 
 /*
@@ -308,6 +309,14 @@ vm_object_reserv(vm_object_t object)
 	return (false);
 }
 
+static __inline bool
+vm_object_mightbedirty(vm_object_t object)
+{
+
+	return (object->type == OBJT_VNODE &&
+	    object->generation != object->cleangeneration);
+}
+
 void vm_object_clear_flag(vm_object_t object, u_short bits);
 void vm_object_pip_add(vm_object_t object, short i);
 void vm_object_pip_wakeup(vm_object_t object);
@@ -332,6 +341,7 @@ void umtx_shm_object_terminated(vm_object_t object);
 extern int umtx_shm_vnobj_persistent;
 
 vm_object_t vm_object_allocate (objtype_t, vm_pindex_t);
+vm_object_t vm_object_allocate_anon(vm_pindex_t);
 boolean_t vm_object_coalesce(vm_object_t, vm_ooffset_t, vm_size_t, vm_size_t,
    boolean_t);
 void vm_object_collapse (vm_object_t);

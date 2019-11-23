@@ -38,6 +38,10 @@
 #   xargs -n1 | sort | uniq -d;
 # done
 
+# 20191121: Removal of sio(4)
+OLD_FILES+=usr/share/man/man4/sio.4.gz
+# 20191105: picobsd(8), et al, removed.
+OLD_FILES+=usr/share/man/man8/picobsd.8.gz
 # 20191009: new clang import which bumps version from 8.0.1 to 9.0.0.
 OLD_FILES+=usr/lib/clang/8.0.1/include/sanitizer/allocator_interface.h
 OLD_FILES+=usr/lib/clang/8.0.1/include/sanitizer/asan_interface.h
@@ -872,6 +876,16 @@ OLD_FILES+=usr/include/openssl/kssl.h
 OLD_FILES+=usr/include/openssl/pqueue.h
 OLD_FILES+=usr/include/openssl/ssl23.h
 OLD_FILES+=usr/include/openssl/ui_compat.h
+OLD_FILES+=usr/lib/debug/usr/lib/engines/lib4758cca.so.debug
+OLD_FILES+=usr/lib/debug/usr/lib/engines/libaep.so.debug
+OLD_FILES+=usr/lib/debug/usr/lib/engines/libatalla.so.debug
+OLD_FILES+=usr/lib/debug/usr/lib/engines/libcapi.so.debug
+OLD_FILES+=usr/lib/debug/usr/lib/engines/libchil.so.debug
+OLD_FILES+=usr/lib/debug/usr/lib/engines/libcswift.so.debug
+OLD_FILES+=usr/lib/debug/usr/lib/engines/libgost.so.debug
+OLD_FILES+=usr/lib/debug/usr/lib/engines/libnuron.so.debug
+OLD_FILES+=usr/lib/debug/usr/lib/engines/libsureware.so.debug
+OLD_FILES+=usr/lib/debug/usr/lib/engines/libubsec.so.debug
 OLD_FILES+=usr/share/openssl/man/man1/dss1.1.gz
 OLD_FILES+=usr/share/openssl/man/man1/md2.1.gz
 OLD_FILES+=usr/share/openssl/man/man1/md4.1.gz
@@ -5614,8 +5628,6 @@ OLD_DIRS+=usr/share/man/man1aout
 OLD_DIRS+=usr/share/man/cat1aout
 OLD_DIRS+=usr/share/man/en.ISO8859-1/cat1aout
 OLD_DIRS+=usr/share/man/en.UTF-8/cat1aout
-# 20130110: bsd.compat.mk removed
-OLD_FILES+=usr/share/mk/bsd.compat.mk
 # 20130103: gnats-supfile removed
 OLD_FILES+=usr/share/examples/cvsup/gnats-supfile
 # 20121230: libdisk removed
