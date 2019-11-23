@@ -163,10 +163,10 @@ sctp_pathmtu_adjustment(struct sctp_tcb *stcb, uint16_t nxtsz, struct sctp_nets 
 					    chk->rec.data.tsn);
 				}
 				/* Clear any time so NO RTT is being done */
-				if (chk->do_rtt == 1) {
+                                if (chk->do_rtt == 1){
 					chk->do_rtt = 0;
-					chk->whoTo->rto_needed = 1;
-				}
+					net->rto_needed = 1;
+                                }
 			}
 		}
 	}
