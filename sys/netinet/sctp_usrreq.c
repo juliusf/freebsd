@@ -235,6 +235,10 @@ sctp_notify(struct sctp_inpcb *inp,
 				sctp_pathmtu_timer(inp, stcb, net);
 			}
 			if (net->probing_state > SCTP_PROBE_DISABLED && net->probing_state < SCTP_PROBE_SEARCH_COMPLETE) {
+				if (next_mtu < SCTP_PROBE_MIN_PMTU){
+					return;
+				}
+
 				if (next_mtu == 0) {
 					switch (net->probing_state) {
 					case SCTP_PROBE_BASE:
