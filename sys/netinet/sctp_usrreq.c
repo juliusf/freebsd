@@ -183,7 +183,6 @@ sctp_notify(struct sctp_inpcb *inp,
     uint32_t next_mtu)
 {
 	int timer_stopped;
-
 	if (icmp_type != ICMP_UNREACH) {
 		/* We only care about unreachable */
 		SCTP_TCB_UNLOCK(stcb);
@@ -216,12 +215,21 @@ sctp_notify(struct sctp_inpcb *inp,
 		/* no need to unlock here, since the TCB is gone */
 	} else if (icmp_code == ICMP_UNREACH_NEEDFRAG) {
 		if (inp->plpmtud_supported) {
-			uint32_t base;
+			uint32_t base = SCTP_PROBE_BASE_PMTU_V4;
 #ifdef INET
 			if (stcb->asoc.scope.ipv4_addr_legal) {
 				base = SCTP_PROBE_BASE_PMTU_V4;
 			}
 #endif
+
+#ifdef INET6
+			if (stcb->asoc.scope.ipv6_addr_legal){
+
+				base = SCTP_PROBE_BASE_PMTU_V6;
+			}
+#endif
+
+
 			net->probe_count = 0;
 			if (net->probing_state == SCTP_PROBE_SEARCH_COMPLETE) {
 				sctp_pathmtu_timer(inp, stcb, net);
