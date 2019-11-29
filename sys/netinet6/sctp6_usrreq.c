@@ -222,6 +222,9 @@ sctp6_notify(struct sctp_inpcb *inp,
 				sctp_pathmtu_timer(inp, stcb, net);
 			}
 			if (net->probing_state > SCTP_PROBE_DISABLED && net->probing_state < SCTP_PROBE_SEARCH_COMPLETE) {
+				if (next_mtu < SCTP_PROBE_MIN_PMTU){
+					return;
+				}
 				if (next_mtu == 0) {
 					switch (net->probing_state) {
 					case SCTP_PROBE_BASE:
@@ -251,6 +254,7 @@ sctp6_notify(struct sctp_inpcb *inp,
 						break;
 					}
 				} else if (net->plpmtu <= next_mtu && next_mtu < net->probed_size) {
+					next_mtu -= next_mtu % 4;
 					switch (net->probing_state) {
 					case SCTP_PROBE_BASE:
 						net->plpmtu = SCTP_PROBE_MIN_PMTU;
@@ -275,8 +279,8 @@ sctp6_notify(struct sctp_inpcb *inp,
 						break;
 					}
 				} else if (next_mtu < net->plpmtu) {
+					next_mtu -= next_mtu % 4;
 					switch (net->probing_state) {
-					case SCTP_PROBE_BASE:
 					case SCTP_PROBE_SEARCH_DOWN:
 						net->plpmtu = SCTP_PROBE_MIN_PMTU;
 						net->mtu_probing = 0;
@@ -284,6 +288,7 @@ sctp6_notify(struct sctp_inpcb *inp,
 						net->probing_state = SCTP_PROBE_ERROR;
 						sctp_send_hb(stcb, net, SCTP_SO_NOT_LOCKED);
 						break;
+					case SCTP_PROBE_BASE:
 					case SCTP_PROBE_SEARCH_UP:
 						if (next_mtu < base) {
 							net->plpmtu = SCTP_PROBE_MIN_PMTU;
@@ -303,6 +308,7 @@ sctp6_notify(struct sctp_inpcb *inp,
 						break;
 					}
 				} else if (next_mtu == base) {
+					next_mtu -= next_mtu % 4;
 					switch (net->probing_state) {
 					case SCTP_PROBE_BASE:
 						net->plpmtu = SCTP_PROBE_MIN_PMTU;
