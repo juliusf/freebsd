@@ -261,7 +261,7 @@ sctp6_notify(struct sctp_inpcb *inp,
 						break;
 					case SCTP_PROBE_SEARCH_UP:
 						net->mtu_probing = 0;
-						//net->mtu = net->probed_mtu;
+						net->mtu = net->plpmtu;
 						net->max_pmtu = min(net->max_pmtu, next_mtu);
 						net->probed_size = net->max_pmtu;
 						net->probe_count = 0;
@@ -364,6 +364,11 @@ sctp6_notify(struct sctp_inpcb *inp,
 			}
 			if (net->mtu > next_mtu) {
 				net->mtu = next_mtu;
+				if (net->port) {
+					sctp_hc_set_mtu(&net->ro._l_addr, inp->fibnum, next_mtu + sizeof(struct udphdr));
+				} else {
+					sctp_hc_set_mtu(&net->ro._l_addr, inp->fibnum, next_mtu);
+				}
 			}
 			/* Update the association MTU */
 			if (stcb->asoc.smallest_mtu > next_mtu) {
