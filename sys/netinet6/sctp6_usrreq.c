@@ -179,7 +179,7 @@ sctp6_notify(struct sctp_inpcb *inp,
     uint8_t icmp6_code,
     uint32_t next_mtu)
 {
-	int timer_stopped;
+	int timer_stopped = 0;
 
 	switch (icmp6_type) {
 	case ICMP6_DST_UNREACH:
@@ -387,7 +387,7 @@ sctp6_notify(struct sctp_inpcb *inp,
 		}
 		/* Update the association MTU */
 		if (stcb->asoc.smallest_mtu > next_mtu) {
-			sctp_pathmtu_adjustment(stcb, next_mtu);
+			sctp_pathmtu_adjustment(stcb, next_mtu, net);
 		}
 		/* Finally, start the PMTU timer if it was running before. */
 		if (timer_stopped) {

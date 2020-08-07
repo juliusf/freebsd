@@ -7860,10 +7860,12 @@ sctp_send_a_probe(struct sctp_inpcb *inp,
 		sctp_free_ifa(net->ro._s_addr);
 		net->ro._s_addr = NULL;
 		net->src_addr_selected = 0;
+#if 0
 		if (ro->ro_rt) {
 			RTFREE(ro->ro_rt);
 			ro->ro_rt = NULL;
 		}
+#endif
 	}
 	if (net->src_addr_selected == 0) {
 		/* Cache the source address */

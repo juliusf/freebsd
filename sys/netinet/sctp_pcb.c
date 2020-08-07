@@ -4020,7 +4020,7 @@ sctp_add_remote_addr(struct sctp_tcb *stcb, struct sockaddr *newaddr,
 				 * Start things off to match mtu of
 				 * interface please.
 				 */
-				SCTP_SET_MTU_OF_ROUTE(&net->ro._l_addr.sa, net->ro.ro_rt, net->mtu);
+				net->ro.ro_mtu = net->mtu;
 			} else if (stcb->asoc.plpmtud_supported) {
 				net->mtu = min(rmtu, SCTP_DEFAULT_MTU);
 			}
