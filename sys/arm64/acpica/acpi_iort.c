@@ -89,6 +89,7 @@ struct iort_node {
 	u_int			node_offset;	/* offset in IORT - node ID */
 	u_int			nentries;	/* items in array below */
 	u_int			usecount;	/* for bookkeeping */
+	u_int			revision;	/* node revision */
 	union {
 		ACPI_IORT_ROOT_COMPLEX	pci_rc;		/* PCI root complex */
 		ACPI_IORT_SMMU		smmu;
@@ -105,6 +106,39 @@ static TAILQ_HEAD(, iort_node) pci_nodes = TAILQ_HEAD_INITIALIZER(pci_nodes);
 static TAILQ_HEAD(, iort_node) smmu_nodes = TAILQ_HEAD_INITIALIZER(smmu_nodes);
 static TAILQ_HEAD(, iort_node) its_groups = TAILQ_HEAD_INITIALIZER(its_groups);
 
+static int
+iort_entry_get_id_mapping_index(struct iort_node *node)
+{
+
+	switch(node->type) {
+	case ACPI_IORT_NODE_SMMU_V3:
+		/* The ID mapping field was added in version 1 */
+		if (node->revision < 1)
+			return (-1);
+
+		/*
+		 * If all the control interrupts are GISCV based the ID
+		 * mapping field is ignored.
+		 */
+		if (node->data.smmu_v3.EventGsiv != 0 &&
+		    node->data.smmu_v3.PriGsiv != 0 &&
+		    node->data.smmu_v3.GerrGsiv != 0 &&
+		    node->data.smmu_v3.SyncGsiv != 0)
+			return (-1);
+
+		if (node->data.smmu_v3.IdMappingIndex >= node->nentries)
+			return (-1);
+
+		return (node->data.smmu_v3.IdMappingIndex);
+	case ACPI_IORT_NODE_PMCG:
+		return (0);
+	default:
+		break;
+	}
+
+	return (-1);
+}
+
 /*
  * Lookup an ID in the mappings array. If successful, map the input ID
  * to the output ID and return the output node found.
@@ -113,17 +147,20 @@ static struct iort_node *
 iort_entry_lookup(struct iort_node *node, u_int id, u_int *outid)
 {
 	struct iort_map_entry *entry;
-	int i;
+	int i, id_map;
 
+	id_map = iort_entry_get_id_mapping_index(node);
 	entry = node->entries.mappings;
 	for (i = 0; i < node->nentries; i++, entry++) {
+		if (i == id_map)
+			continue;
 		if (entry->base <= id && id <= entry->end)
 			break;
 	}
 	if (i == node->nentries)
 		return (NULL);
 	if ((entry->flags & ACPI_IORT_ID_SINGLE_MAPPING) == 0)
-		*outid =  entry->outbase + (id - entry->base);
+		*outid = entry->outbase + (id - entry->base);
 	else
 		*outid = entry->outbase;
 	return (entry->out_node);
@@ -243,6 +280,7 @@ iort_add_nodes(ACPI_IORT_NODE *node_entry, u_int node_offset)
 	node = malloc(sizeof(*node), M_DEVBUF, M_WAITOK | M_ZERO);
 	node->type =  node_entry->Type;
 	node->node_offset = node_offset;
+	node->revision = node_entry->Revision;
 
 	/* copy nodes depending on type */
 	switch(node_entry->Type) {
@@ -524,5 +562,24 @@ acpi_iort_map_pci_msi(u_int seg, u_int rid, u_int *xref, u_int *devid)
 
 	/* return first node, we don't handle more than that now. */
 	*xref = node->entries.its[0].xref;
+	return (0);
+}
+
+int
+acpi_iort_map_pci_smmuv3(u_int seg, u_int rid, u_int *xref, u_int *sid)
+{
+	ACPI_IORT_SMMU_V3 *smmu;
+	struct iort_node *node;
+
+	node = iort_pci_rc_map(seg, rid, ACPI_IORT_NODE_SMMU_V3, sid);
+	if (node == NULL)
+		return (ENOENT);
+
+	/* This should be an SMMU node. */
+	KASSERT(node->type == ACPI_IORT_NODE_SMMU_V3, ("bad node"));
+
+	smmu = (ACPI_IORT_SMMU_V3 *)&node->data.smmu_v3;
+	*xref = smmu->BaseAddress;
+
 	return (0);
 }

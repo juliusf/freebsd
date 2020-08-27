@@ -33,10 +33,16 @@
  * *Hobbit* <hobbit@avian.org>.
  */
 
+#include <errno.h>
+#include <stdio.h>
+#include <sys/arb.h>
 #include <sys/limits.h>
 #include <sys/types.h>
+#include <sys/sbuf.h>
 #include <sys/socket.h>
 #include <sys/sysctl.h>
+#include <sys/qmath.h>
+#include <sys/stats.h>
 #include <sys/time.h>
 #include <sys/uio.h>
 #include <sys/un.h>
@@ -50,7 +56,6 @@
 #include <arpa/telnet.h>
 
 #include <err.h>
-#include <errno.h>
 #include <getopt.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -58,7 +63,6 @@
 #include <poll.h>
 #include <signal.h>
 #include <stdarg.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -85,9 +89,11 @@ int	Fflag;					/* fdpass sock to stdout */
 unsigned int iflag;				/* Interval Flag */
 int	kflag;					/* More than one connect */
 int	lflag;					/* Bind to local port */
+int	FreeBSD_Mflag;				/* Measure using stats(3) */
 int	Nflag;					/* shutdown() network socket */
 int	nflag;					/* Don't do name look up */
 int	FreeBSD_Oflag;				/* Do not use TCP options */
+int	FreeBSD_sctp;				/* Use SCTP */
 char   *Pflag;					/* Proxy username */
 char   *pflag;					/* Localport flag */
 int	rflag;					/* Random ports flag */
@@ -123,6 +129,8 @@ int	udptest(int);
 int	unix_bind(char *);
 int	unix_connect(char *);
 int	unix_listen(char *);
+void	FreeBSD_stats_setup(int);
+void	FreeBSD_stats_print(int);
 void	set_common_sockopts(int, int);
 int	map_tos(char *, int *);
 void	report_connect(const struct sockaddr *, socklen_t);
@@ -153,6 +161,7 @@ main(int argc, char *argv[])
 	char unix_dg_tmp_socket_buf[UNIX_DG_TMP_SOCKET_SIZE];
 	struct option longopts[] = {
 		{ "no-tcpopt",	no_argument,	&FreeBSD_Oflag,	1 },
+		{ "sctp",	no_argument,	&FreeBSD_sctp,	1 },
 		{ NULL,		0,		NULL,		0 }
 	};
 
@@ -167,7 +176,7 @@ main(int argc, char *argv[])
 	signal(SIGPIPE, SIG_IGN);
 
 	while ((ch = getopt_long(argc, argv,
-	    "46DdEe:FhI:i:klNnoO:P:p:rSs:tT:UuV:vw:X:x:z",
+	    "46DdEe:FhI:i:klMNnoO:P:p:rSs:tT:UuV:vw:X:x:z",
 	    longopts, NULL)) != -1) {
 		switch (ch) {
 		case '4':
@@ -223,6 +232,13 @@ main(int argc, char *argv[])
 			break;
 		case 'l':
 			lflag = 1;
+			break;
+		case 'M':
+#ifndef WITH_STATS
+			errx(1, "-M requires stats(3) support");
+#else
+			FreeBSD_Mflag = 1;
+#endif
 			break;
 		case 'N':
 			Nflag = 1;
@@ -310,6 +326,9 @@ main(int argc, char *argv[])
 			if (Tflag < 0 || Tflag > 255 || errstr || errno)
 				errx(1, "illegal tos value %s", optarg);
 			break;
+		case 0:
+			/* Long option. */
+			break;
 		default:
 			usage(1);
 		}
@@ -340,6 +359,12 @@ main(int argc, char *argv[])
 		errx(1, "cannot use -z and -l");
 	if (!lflag && kflag)
 		errx(1, "must use -l with -k");
+	if (FreeBSD_sctp) {
+		if (uflag)
+			errx(1, "cannot use -u and --sctp");
+		if (family == AF_UNIX)
+			errx(1, "cannot use -U and --sctp");
+	}
 
 	/* Get name of temporary socket for unix datagram client */
 	if ((family == AF_UNIX) && uflag && !lflag) {
@@ -359,7 +384,8 @@ main(int argc, char *argv[])
 		memset(&hints, 0, sizeof(struct addrinfo));
 		hints.ai_family = family;
 		hints.ai_socktype = uflag ? SOCK_DGRAM : SOCK_STREAM;
-		hints.ai_protocol = uflag ? IPPROTO_UDP : IPPROTO_TCP;
+		hints.ai_protocol = uflag ? IPPROTO_UDP :
+		    FreeBSD_sctp ? IPPROTO_SCTP : IPPROTO_TCP;
 		if (nflag)
 			hints.ai_flags |= AI_NUMERICHOST;
 	}
@@ -367,6 +393,9 @@ main(int argc, char *argv[])
 	if (xflag) {
 		if (uflag)
 			errx(1, "no proxy support for UDP mode");
+
+		if (FreeBSD_sctp)
+			errx(1, "no proxy support for SCTP mode");
 
 		if (lflag)
 			errx(1, "no proxy support for listen");
@@ -451,6 +480,8 @@ main(int argc, char *argv[])
 				if (vflag)
 					report_connect((struct sockaddr *)&cliaddr, len);
 
+				if (FreeBSD_Mflag)
+					FreeBSD_stats_setup(connfd);
 				readwrite(connfd);
 				close(connfd);
 			}
@@ -801,6 +832,7 @@ readwrite(int net_fd)
 	unsigned char stdinbuf[BUFSIZE];
 	size_t stdinbufpos = 0;
 	int n, num_fds;
+	int stats_printed = 0;
 	ssize_t ret;
 
 	/* don't read from stdin if requested */
@@ -827,17 +859,23 @@ readwrite(int net_fd)
 		/* both inputs are gone, buffers are empty, we are done */
 		if (pfd[POLL_STDIN].fd == -1 && pfd[POLL_NETIN].fd == -1
 		    && stdinbufpos == 0 && netinbufpos == 0) {
+			if (FreeBSD_Mflag && !stats_printed)
+				FreeBSD_stats_print(net_fd);
 			close(net_fd);
 			return;
 		}
 		/* both outputs are gone, we can't continue */
 		if (pfd[POLL_NETOUT].fd == -1 && pfd[POLL_STDOUT].fd == -1) {
+			if (FreeBSD_Mflag && !stats_printed)
+				FreeBSD_stats_print(net_fd);
 			close(net_fd);
 			return;
 		}
 		/* listen and net in gone, queues empty, done */
 		if (lflag && pfd[POLL_NETIN].fd == -1
 		    && stdinbufpos == 0 && netinbufpos == 0) {
+			if (FreeBSD_Mflag && !stats_printed)
+				FreeBSD_stats_print(net_fd);
 			close(net_fd);
 			return;
 		}
@@ -858,8 +896,11 @@ readwrite(int net_fd)
 		}
 
 		/* timeout happened */
-		if (num_fds == 0)
+		if (num_fds == 0) {
+			if (FreeBSD_Mflag)
+				FreeBSD_stats_print(net_fd);
 			return;
+		}
 
 		/* treat socket error conditions */
 		for (n = 0; n < 4; n++) {
@@ -961,8 +1002,13 @@ readwrite(int net_fd)
 
 		/* stdin gone and queue empty? */
 		if (pfd[POLL_STDIN].fd == -1 && stdinbufpos == 0) {
-			if (pfd[POLL_NETOUT].fd != -1 && Nflag)
+			if (pfd[POLL_NETOUT].fd != -1 && Nflag) {
+				if (FreeBSD_Mflag) {
+					FreeBSD_stats_print(net_fd);
+					stats_printed = 1;
+				}
 				shutdown(pfd[POLL_NETOUT].fd, SHUT_WR);
+			}
 			pfd[POLL_NETOUT].fd = -1;
 		}
 		/* net in gone and queue empty? */
@@ -1181,6 +1227,67 @@ udptest(int s)
 }
 
 void
+FreeBSD_stats_setup(int s)
+{
+
+	if (setsockopt(s, IPPROTO_TCP, TCP_STATS,
+	    &FreeBSD_Mflag, sizeof(FreeBSD_Mflag)) == -1) {
+		if (errno == EOPNOTSUPP) {
+			warnx("getsockopt(TCP_STATS) failed; "
+			    "kernel built without \"options STATS\"?");
+		}
+		err(1, "enable TCP_STATS gathering");
+	}
+}
+
+void
+FreeBSD_stats_print(int s)
+{
+#ifdef WITH_STATS
+	struct statsblob *statsb;
+	struct sbuf *sb;
+	socklen_t sockoptlen;
+	int error;
+
+	/*
+	 * This usleep is a workaround for TCP_STATS reporting
+	 * incorrect values for TXPB.
+	 */
+	usleep(100000);
+
+	sockoptlen = 2048;
+	statsb = malloc(sockoptlen);
+	if (statsb == NULL)
+		err(1, "malloc");
+	error = getsockopt(s, IPPROTO_TCP, TCP_STATS, statsb, &sockoptlen);
+	if (error != 0) {
+		if (errno == EOVERFLOW && statsb->cursz > sockoptlen) {
+			/* Retry with a larger size. */
+			sockoptlen = statsb->cursz;
+			statsb = realloc(statsb, sockoptlen);
+			if (statsb == NULL)
+				err(1, "realloc");
+			error = getsockopt(s, IPPROTO_TCP, TCP_STATS,
+			    statsb, &sockoptlen);
+		}
+		if (error != 0)
+			err(1, "getsockopt");
+	}
+
+	sb = sbuf_new_auto();
+	error = stats_blob_tostr(statsb, sb, SB_STRFMT_JSON, SB_TOSTR_META);
+	if (error != 0)
+		errc(1, error, "stats_blob_tostr");
+
+	error = sbuf_finish(sb);
+	if (error != 0)
+		err(1, "sbuf_finish");
+
+	fprintf(stderr, "%s\n", sbuf_data(sb));
+#endif
+}
+
+void
 set_common_sockopts(int s, int af)
 {
 	int x = 1;
@@ -1224,6 +1331,8 @@ set_common_sockopts(int s, int af)
 		    &FreeBSD_Oflag, sizeof(FreeBSD_Oflag)) == -1)
 			err(1, "disable TCP options");
 	}
+	if (FreeBSD_Mflag)
+		FreeBSD_stats_setup(s);
 #ifdef IPSEC
 	if (ipsec_policy[0] != NULL)
 		add_ipsec_policy(s, af, ipsec_policy[0]);
@@ -1330,6 +1439,7 @@ help(void)
 	\t-N		Shutdown the network socket after EOF on stdin\n\
 	\t-n		Suppress name/port resolutions\n\
 	\t--no-tcpopt	Disable TCP options\n\
+	\t--sctp\t	SCTP mode\n\
 	\t-O length	TCP send buffer length\n\
 	\t-P proxyuser\tUsername for proxy authentication\n\
 	\t-p port\t	Specify local port for remote connects\n\
@@ -1348,7 +1458,7 @@ help(void)
 	\t-z		Zero-I/O mode [used for scanning]\n\
 	Port numbers can be individual or ranges: lo-hi [inclusive]\n");
 #ifdef IPSEC
-	fprintf(stderr, "See ipsec_set_policy(3) for -e argument format\n");
+	fprintf(stderr, "\tSee ipsec_set_policy(3) for -e argument format\n");
 #endif
 	exit(1);
 }
@@ -1388,6 +1498,7 @@ usage(int ret)
 #else
 	    "usage: nc [-46DdFhklNnrStUuvz] [-I length] [-i interval] [-O length]\n"
 #endif
+	    "\t  [--no-tcpopt] [--sctp]\n"
 	    "\t  [-P proxy_username] [-p source_port] [-s source] [-T ToS]\n"
 	    "\t  [-V rtable] [-w timeout] [-X proxy_protocol]\n"
 	    "\t  [-x proxy_address[:port]] [destination] [port]\n");

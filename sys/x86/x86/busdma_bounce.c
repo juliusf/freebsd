@@ -114,7 +114,8 @@ static int total_bpages;
 static int busdma_zonecount;
 static STAILQ_HEAD(, bounce_zone) bounce_zone_list;
 
-static SYSCTL_NODE(_hw, OID_AUTO, busdma, CTLFLAG_RD, 0, "Busdma parameters");
+static SYSCTL_NODE(_hw, OID_AUTO, busdma, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
+    "Busdma parameters");
 SYSCTL_INT(_hw_busdma, OID_AUTO, total_bpages, CTLFLAG_RD, &total_bpages, 0,
 	   "Total bounce pages");
 
@@ -270,7 +271,7 @@ bounce_bus_dma_tag_destroy(bus_dma_tag_t dmat)
 			atomic_subtract_int(&dmat->common.ref_count, 1);
 			if (dmat->common.ref_count == 0) {
 				if (dmat->segments != NULL)
-					free_domain(dmat->segments, M_DEVBUF);
+					free(dmat->segments, M_DEVBUF);
 				free(dmat, M_DEVBUF);
 				/*
 				 * Last reference count, so
@@ -386,7 +387,7 @@ bounce_bus_dmamap_destroy(bus_dma_tag_t dmat, bus_dmamap_t map)
 		}
 		if (dmat->bounce_zone)
 			dmat->bounce_zone->map_count--;
-		free_domain(map, M_DEVBUF);
+		free(map, M_DEVBUF);
 	}
 	dmat->map_count--;
 	CTR2(KTR_BUSDMA, "%s: tag %p error 0", __func__, dmat);
@@ -405,8 +406,6 @@ bounce_bus_dmamem_alloc(bus_dma_tag_t dmat, void** vaddr, int flags,
 {
 	vm_memattr_t attr;
 	int mflags;
-
-	WITNESS_WARN(WARN_GIANTOK | WARN_SLEEPOK, NULL, "%s", __func__);
 
 	if (flags & BUS_DMA_NOWAIT)
 		mflags = M_NOWAIT;
@@ -491,7 +490,7 @@ bounce_bus_dmamem_alloc(bus_dma_tag_t dmat, void** vaddr, int flags,
 }
 
 /*
- * Free a piece of memory and it's allociated dmamap, that was allocated
+ * Free a piece of memory and its associated dmamap, that was allocated
  * via bus_dmamem_alloc.  Make the same choice for free/contigfree.
  */
 static void
@@ -505,7 +504,7 @@ bounce_bus_dmamem_free(bus_dma_tag_t dmat, void *vaddr, bus_dmamap_t map)
 	if (map != NULL)
 		panic("bus_dmamem_free: Invalid map freed\n");
 	if ((dmat->bounce_flags & BUS_DMA_KMEM_ALLOC) == 0)
-		free_domain(vaddr, M_DEVBUF);
+		free(vaddr, M_DEVBUF);
 	else
 		kmem_free((vm_offset_t)vaddr, dmat->common.maxsize);
 	CTR3(KTR_BUSDMA, "%s: tag %p flags 0x%x", __func__, dmat,
@@ -1125,7 +1124,7 @@ alloc_bounce_zone(bus_dma_tag_t dmat)
 	sysctl_ctx_init(&bz->sysctl_tree);
 	bz->sysctl_tree_top = SYSCTL_ADD_NODE(&bz->sysctl_tree,
 	    SYSCTL_STATIC_CHILDREN(_hw_busdma), OID_AUTO, bz->zoneid,
-	    CTLFLAG_RD, 0, "");
+	    CTLFLAG_RD | CTLFLAG_MPSAFE, 0, "");
 	if (bz->sysctl_tree_top == NULL) {
 		sysctl_ctx_free(&bz->sysctl_tree);
 		return (0);	/* XXX error code? */
@@ -1189,7 +1188,7 @@ alloc_bounce_pages(bus_dma_tag_t dmat, u_int numpages)
 		    M_DEVBUF, DOMAINSET_PREF(dmat->common.domain), M_NOWAIT,
 		    0ul, bz->lowaddr, PAGE_SIZE, 0);
 		if (bpage->vaddr == 0) {
-			free_domain(bpage, M_DEVBUF);
+			free(bpage, M_DEVBUF);
 			break;
 		}
 		bpage->busaddr = pmap_kextract(bpage->vaddr);

@@ -72,7 +72,8 @@
 #ifdef USB_DEBUG
 static int ustorage_fs_debug = 0;
 
-SYSCTL_NODE(_hw_usb, OID_AUTO, ustorage_fs, CTLFLAG_RW, 0, "USB ustorage_fs");
+SYSCTL_NODE(_hw_usb, OID_AUTO, ustorage_fs, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "USB ustorage_fs");
 SYSCTL_INT(_hw_usb_ustorage_fs, OID_AUTO, debug, CTLFLAG_RWTUN,
     &ustorage_fs_debug, 0, "ustorage_fs debug level");
 #endif
@@ -380,10 +381,6 @@ ustorage_fs_attach(device_t dev)
 			ustorage_fs_ramdisk =
 			    malloc(USTORAGE_FS_RAM_SECT << 9, M_USB,
 			    M_ZERO | M_WAITOK);
-
-			if (ustorage_fs_ramdisk == NULL) {
-				return (ENOMEM);
-			}
 		}
 		sc->sc_lun[0].memory_image = ustorage_fs_ramdisk;
 		sc->sc_lun[0].num_sectors = USTORAGE_FS_RAM_SECT;

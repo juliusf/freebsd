@@ -50,6 +50,7 @@ struct pvo_entry;
 	int		pc_bsp;						\
 	volatile int	pc_awake;					\
 	uint32_t	pc_ipimask;					\
+	uint32_t	pc_flags;		/* cpu feature flags */ \
 	register_t	pc_tempsave[CPUSAVE_LEN];			\
 	register_t	pc_disisave[CPUSAVE_LEN];			\
 	register_t	pc_dbsave[CPUSAVE_LEN];				\
@@ -68,13 +69,17 @@ struct pvo_entry;
 	uint8_t		slbstack[1024];				\
 	struct pvo_entry *qmap_pvo;					\
 	struct mtx	qmap_lock;					\
-	char		__pad[1345];
+	uint64_t	opal_hmi_flags;					\
+	char		__pad[1337];
 
 #ifdef __powerpc64__
 #define PCPU_MD_AIM_FIELDS	PCPU_MD_AIM64_FIELDS
 #else
 #define PCPU_MD_AIM_FIELDS	PCPU_MD_AIM32_FIELDS
 #endif
+
+/* CPU feature flags, can be used for cached flow control. */
+#define	PC_FLAG_NOSRS		0x80000000
 
 #define	BOOKE_CRITSAVE_LEN	(CPUSAVE_LEN + 2)
 #define	BOOKE_TLB_MAXNEST	4

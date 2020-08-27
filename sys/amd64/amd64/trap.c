@@ -52,13 +52,11 @@ __FBSDID("$FreeBSD$");
 #include "opt_hwpmc_hooks.h"
 #include "opt_isa.h"
 #include "opt_kdb.h"
-#include "opt_stack.h"
 
 #include <sys/param.h>
 #include <sys/bus.h>
 #include <sys/systm.h>
 #include <sys/proc.h>
-#include <sys/pioctl.h>
 #include <sys/ptrace.h>
 #include <sys/kdb.h>
 #include <sys/kernel.h>
@@ -228,11 +226,6 @@ trap(struct trapframe *frame)
 		    (*pmc_intr)(frame) != 0)
 			return;
 #endif
-
-#ifdef STACK
-		if (stack_nmi_handler(frame) != 0)
-			return;
-#endif
 	}
 
 	if ((frame->tf_rflags & PSL_I) == 0) {
@@ -357,11 +350,9 @@ trap(struct trapframe *frame)
 			signo = SIGFPE;
 			break;
 
-#ifdef DEV_ISA
 		case T_NMI:
 			nmi_handle_intr(type, frame);
 			return;
-#endif
 
 		case T_OFLOW:		/* integer overflow fault */
 			ucode = FPE_INTOVF;
@@ -587,11 +578,9 @@ trap(struct trapframe *frame)
 #endif
 			break;
 
-#ifdef DEV_ISA
 		case T_NMI:
 			nmi_handle_intr(type, frame);
 			return;
-#endif
 		}
 
 		trap_fatal(frame, 0);
@@ -938,7 +927,7 @@ trap_user_dtrace(struct trapframe *frame, int (**hookp)(struct trapframe *))
 {
 	int (*hook)(struct trapframe *);
 
-	hook = (int (*)(struct trapframe *))atomic_load_ptr(hookp);
+	hook = atomic_load_ptr(hookp);
 	enable_intr();
 	if (hook != NULL)
 		return ((hook)(frame) == 0);
@@ -998,8 +987,6 @@ cpu_fetch_syscall_args_fallback(struct thread *td, struct syscall_args *sa)
 	frame = td->td_frame;
 	reg = 0;
 	regcnt = NARGREGS;
-
-	sa->code = frame->tf_rax;
 
 	if (sa->code == SYS_syscall || sa->code == SYS___syscall) {
 		sa->code = frame->tf_rdi;
@@ -1076,25 +1063,32 @@ flush_l1d_hw(void)
 	wrmsr(MSR_IA32_FLUSH_CMD, IA32_FLUSH_CMD_L1D);
 }
 
-static void __inline
-amd64_syscall_ret_flush_l1d_inline(int error)
+static void __noinline
+amd64_syscall_ret_flush_l1d_check(int error)
 {
 	void (*p)(void);
 
-	if (error != 0 && error != EEXIST && error != EAGAIN &&
-	    error != EXDEV && error != ENOENT && error != ENOTCONN &&
-	    error != EINPROGRESS) {
-		p = syscall_ret_l1d_flush;
+	if (error != EEXIST && error != EAGAIN && error != EXDEV &&
+	    error != ENOENT && error != ENOTCONN && error != EINPROGRESS) {
+		p = atomic_load_ptr(&syscall_ret_l1d_flush);
 		if (p != NULL)
 			p();
 	}
+}
+
+static void __inline
+amd64_syscall_ret_flush_l1d_check_inline(int error)
+{
+
+	if (__predict_false(error != 0))
+		amd64_syscall_ret_flush_l1d_check(error);
 }
 
 void
 amd64_syscall_ret_flush_l1d(int error)
 {
 
-	amd64_syscall_ret_flush_l1d_inline(error);
+	amd64_syscall_ret_flush_l1d_check_inline(error);
 }
 
 void
@@ -1198,5 +1192,5 @@ amd64_syscall(struct thread *td, int traced)
 	if (__predict_false(td->td_frame->tf_rip >= VM_MAXUSER_ADDRESS))
 		set_pcb_flags(td->td_pcb, PCB_FULL_IRET);
 
-	amd64_syscall_ret_flush_l1d_inline(td->td_errno);
+	amd64_syscall_ret_flush_l1d_check_inline(td->td_errno);
 }

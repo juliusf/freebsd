@@ -41,7 +41,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/ktr.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
-#include <sys/pioctl.h>
 #include <sys/bus.h>
 #include <sys/proc.h>
 #include <sys/ptrace.h>
@@ -81,7 +80,7 @@ void do_trap_supervisor(struct trapframe *);
 void do_trap_user(struct trapframe *);
 
 static __inline void
-call_trapsignal(struct thread *td, int sig, int code, void *addr)
+call_trapsignal(struct thread *td, int sig, int code, void *addr, int trapno)
 {
 	ksiginfo_t ksi;
 
@@ -89,6 +88,7 @@ call_trapsignal(struct thread *td, int sig, int code, void *addr)
 	ksi.ksi_signo = sig;
 	ksi.ksi_code = code;
 	ksi.ksi_addr = addr;
+	ksi.ksi_trapno = trapno;
 	trapsignal(td, &ksi);
 }
 
@@ -147,6 +147,11 @@ dump_regs(struct trapframe *frame)
 	n = (sizeof(frame->tf_a) / sizeof(frame->tf_a[0]));
 	for (i = 0; i < n; i++)
 		printf("a[%d] == 0x%016lx\n", i, frame->tf_a[i]);
+
+	printf("ra == 0x%016lx\n", frame->tf_ra);
+	printf("sp == 0x%016lx\n", frame->tf_sp);
+	printf("gp == 0x%016lx\n", frame->tf_gp);
+	printf("tp == 0x%016lx\n", frame->tf_tp);
 
 	printf("sepc == 0x%016lx\n", frame->tf_sepc);
 	printf("sstatus == 0x%016lx\n", frame->tf_sstatus);
@@ -220,7 +225,8 @@ data_abort(struct trapframe *frame, int usermode)
 	error = vm_fault_trap(map, va, ftype, VM_FAULT_NORMAL, &sig, &ucode);
 	if (error != KERN_SUCCESS) {
 		if (usermode) {
-			call_trapsignal(td, sig, ucode, (void *)stval);
+			call_trapsignal(td, sig, ucode, (void *)stval,
+			    frame->tf_scause & EXCP_MASK);
 		} else {
 			if (pcb->pcb_onfault != 0) {
 				frame->tf_a[0] = error;
@@ -245,14 +251,12 @@ void
 do_trap_supervisor(struct trapframe *frame)
 {
 	uint64_t exception;
-	uint64_t sstatus;
 
 	/* Ensure we came from supervisor mode, interrupts disabled */
-	__asm __volatile("csrr %0, sstatus" : "=&r" (sstatus));
-	KASSERT((sstatus & (SSTATUS_SPP | SSTATUS_SIE)) == SSTATUS_SPP,
-			("We must came from S mode with interrupts disabled"));
+	KASSERT((csr_read(sstatus) & (SSTATUS_SPP | SSTATUS_SIE)) ==
+	    SSTATUS_SPP, ("Came from S mode with interrupts enabled"));
 
-	exception = (frame->tf_scause & EXCP_MASK);
+	exception = frame->tf_scause & EXCP_MASK;
 	if (frame->tf_scause & EXCP_INTR) {
 		/* Interrupt */
 		riscv_cpu_intr(frame);
@@ -267,7 +271,7 @@ do_trap_supervisor(struct trapframe *frame)
 	CTR3(KTR_TRAP, "do_trap_supervisor: curthread: %p, sepc: %lx, frame: %p",
 	    curthread, frame->tf_sepc, frame);
 
-	switch(exception) {
+	switch (exception) {
 	case EXCP_FAULT_LOAD:
 	case EXCP_FAULT_STORE:
 	case EXCP_FAULT_FETCH:
@@ -277,10 +281,9 @@ do_trap_supervisor(struct trapframe *frame)
 		break;
 	case EXCP_BREAKPOINT:
 #ifdef KDTRACE_HOOKS
-		if (dtrace_invop_jump_addr != 0) {
-			dtrace_invop_jump_addr(frame);
-			break;
-		}
+		if (dtrace_invop_jump_addr != NULL &&
+		    dtrace_invop_jump_addr(frame) == 0)
+				break;
 #endif
 #ifdef KDB
 		kdb_trap(exception, 0, frame);
@@ -305,7 +308,6 @@ do_trap_user(struct trapframe *frame)
 {
 	uint64_t exception;
 	struct thread *td;
-	uint64_t sstatus;
 	struct pcb *pcb;
 
 	td = curthread;
@@ -313,11 +315,10 @@ do_trap_user(struct trapframe *frame)
 	pcb = td->td_pcb;
 
 	/* Ensure we came from usermode, interrupts disabled */
-	__asm __volatile("csrr %0, sstatus" : "=&r" (sstatus));
-	KASSERT((sstatus & (SSTATUS_SPP | SSTATUS_SIE)) == 0,
-			("We must came from U mode with interrupts disabled"));
+	KASSERT((csr_read(sstatus) & (SSTATUS_SPP | SSTATUS_SIE)) == 0,
+	    ("Came from U mode with interrupts enabled"));
 
-	exception = (frame->tf_scause & EXCP_MASK);
+	exception = frame->tf_scause & EXCP_MASK;
 	if (frame->tf_scause & EXCP_INTR) {
 		/* Interrupt */
 		riscv_cpu_intr(frame);
@@ -327,7 +328,7 @@ do_trap_user(struct trapframe *frame)
 	CTR3(KTR_TRAP, "do_trap_user: curthread: %p, sepc: %lx, frame: %p",
 	    curthread, frame->tf_sepc, frame);
 
-	switch(exception) {
+	switch (exception) {
 	case EXCP_FAULT_LOAD:
 	case EXCP_FAULT_STORE:
 	case EXCP_FAULT_FETCH:
@@ -354,11 +355,13 @@ do_trap_user(struct trapframe *frame)
 			break;
 		}
 #endif
-		call_trapsignal(td, SIGILL, ILL_ILLTRP, (void *)frame->tf_sepc);
+		call_trapsignal(td, SIGILL, ILL_ILLTRP, (void *)frame->tf_sepc,
+		    exception);
 		userret(td, frame);
 		break;
 	case EXCP_BREAKPOINT:
-		call_trapsignal(td, SIGTRAP, TRAP_BRKPT, (void *)frame->tf_sepc);
+		call_trapsignal(td, SIGTRAP, TRAP_BRKPT, (void *)frame->tf_sepc,
+		    exception);
 		userret(td, frame);
 		break;
 	default:

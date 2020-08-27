@@ -53,6 +53,8 @@ extern int cold;		/* nonzero if we are doing a cold boot */
 extern int suspend_blocked;	/* block suspend due to pending shutdown */
 extern int rebooting;		/* kern_reboot() has been called. */
 extern const char *panicstr;	/* panic message */
+extern bool panicked;
+#define	KERNEL_PANICKED()	__predict_false(panicked)
 extern char version[];		/* system version */
 extern char compiler_version[];	/* compiler version */
 extern char copyright[];	/* system copyright */
@@ -105,16 +107,28 @@ void	kassert_panic(const char *fmt, ...)  __printflike(1, 2);
 } while (0)
 #define	VNASSERT(exp, vp, msg) do {					\
 	if (__predict_false(!(exp))) {					\
-		vn_printf(vp, "VNASSERT failed\n");			\
+		vn_printf(vp, "VNASSERT failed: %s not true at %s:%d (%s)\n",\
+		   #exp, __FILE__, __LINE__, __func__);	 		\
 		kassert_panic msg;					\
 	}								\
 } while (0)
+#define	VNPASS(exp, vp)	do {						\
+	const char *_exp = #exp;					\
+	VNASSERT(exp, vp, ("condition %s not met at %s:%d (%s)",	\
+	    _exp, __FILE__, __LINE__, __func__));			\
+} while (0)
+#define	__assert_unreachable() \
+	panic("executing segment marked as unreachable at %s:%d (%s)\n", \
+	    __FILE__, __LINE__, __func__)
 #else
 #define	KASSERT(exp,msg) do { \
 } while (0)
 
 #define	VNASSERT(exp, vp, msg) do { \
 } while (0)
+#define	VNPASS(exp, vp) do { \
+} while (0)
+#define	__assert_unreachable()	__unreachable()
 #endif
 
 #ifndef CTASSERT	/* Allow lint to override */
@@ -126,6 +140,16 @@ void	kassert_panic(const char *fmt, ...)  __printflike(1, 2);
 #include <sys/pcpu.h>		/* curthread */
 #include <sys/kpilite.h>
 #endif
+
+/*
+ * Helpful macros for quickly coming up with assertions with informative
+ * panic messages.
+ */
+#define MPASS(ex)		MPASS4(ex, #ex, __FILE__, __LINE__)
+#define MPASS2(ex, what)	MPASS4(ex, what, __FILE__, __LINE__)
+#define MPASS3(ex, file, line)	MPASS4(ex, #ex, file, line)
+#define MPASS4(ex, what, file, line)					\
+	KASSERT((ex), ("Assertion %s failed at %s:%d", what, file, line))
 
 /*
  * Assert that a pointer can be loaded from memory atomically.
@@ -352,9 +376,17 @@ void	*memcpy_early(void * _Nonnull to, const void * _Nonnull from, size_t len);
 void	*memmove_early(void * _Nonnull dest, const void * _Nonnull src, size_t n);
 #define bcopy_early(from, to, len) memmove_early((to), (from), (len))
 
-int	copystr(const void * _Nonnull __restrict kfaddr,
-	    void * _Nonnull __restrict kdaddr, size_t len,
-	    size_t * __restrict lencopied);
+#define	copystr(src, dst, len, outlen)	({			\
+	size_t __r, __len, *__outlen;				\
+								\
+	__len = (len);						\
+	__outlen = (outlen);					\
+	__r = strlcpy((dst), (src), __len);			\
+	if (__outlen != NULL)					\
+		*__outlen = ((__r >= __len) ? __len : __r + 1);	\
+	((__r >= __len) ? ENAMETOOLONG : 0);			\
+})
+
 int	copyinstr(const void * __restrict udaddr,
 	    void * _Nonnull __restrict kaddr, size_t len,
 	    size_t * __restrict lencopied);
@@ -368,11 +400,9 @@ int	copyout_nofault(const void * _Nonnull __restrict kaddr,
 	    void * __restrict udaddr, size_t len);
 
 #ifdef KCSAN
-int	kcsan_copystr(const void *, void *, size_t, size_t *);
 int	kcsan_copyin(const void *, void *, size_t);
 int	kcsan_copyinstr(const void *, void *, size_t, size_t *);
 int	kcsan_copyout(const void *, void *, size_t);
-#define	copystr(kf, k, l, lc) kcsan_copystr((kf), (k), (l), (lc))
 #define	copyin(u, k, l) kcsan_copyin((u), (k), (l))
 #define	copyinstr(u, k, l, lc) kcsan_copyinstr((u), (k), (l), (lc))
 #define	copyout(k, u, l) kcsan_copyout((k), (u), (l))
@@ -466,15 +496,6 @@ void	usrinfoinit(void);
 void	kern_reboot(int) __dead2;
 void	shutdown_nice(int);
 
-/* Timeouts */
-typedef void timeout_t(void *);	/* timeout function type */
-#define CALLOUT_HANDLE_INITIALIZER(handle)	\
-	{ NULL }
-
-void	callout_handle_init(struct callout_handle *);
-struct	callout_handle timeout(timeout_t *, void *, int);
-void	untimeout(timeout_t *, void *, struct callout_handle);
-
 /* Stubs for obsolete functions that used to be for interrupt management */
 static __inline intrmask_t	splbio(void)		{ return 0; }
 static __inline intrmask_t	splcam(void)		{ return 0; }
@@ -489,7 +510,7 @@ static __inline void		splx(intrmask_t ipl __unused)	{ return; }
  * Common `proc' functions are declared here so that proc.h can be included
  * less often.
  */
-int	_sleep(void * _Nonnull chan, struct lock_object *lock, int pri,
+int	_sleep(const void * _Nonnull chan, struct lock_object *lock, int pri,
 	   const char *wmesg, sbintime_t sbt, sbintime_t pr, int flags);
 #define	msleep(chan, mtx, pri, wmesg, timo)				\
 	_sleep((chan), &(mtx)->lock_object, (pri), (wmesg),		\
@@ -497,7 +518,7 @@ int	_sleep(void * _Nonnull chan, struct lock_object *lock, int pri,
 #define	msleep_sbt(chan, mtx, pri, wmesg, bt, pr, flags)		\
 	_sleep((chan), &(mtx)->lock_object, (pri), (wmesg), (bt), (pr),	\
 	    (flags))
-int	msleep_spin_sbt(void * _Nonnull chan, struct mtx *mtx,
+int	msleep_spin_sbt(const void * _Nonnull chan, struct mtx *mtx,
 	    const char *wmesg, sbintime_t sbt, sbintime_t pr, int flags);
 #define	msleep_spin(chan, mtx, wmesg, timo)				\
 	msleep_spin_sbt((chan), (mtx), (wmesg), tick_sbt * (timo),	\
@@ -513,9 +534,9 @@ int	pause_sbt(const char *wmesg, sbintime_t sbt, sbintime_t pr,
 	    0, C_HARDCLOCK)
 #define	tsleep_sbt(chan, pri, wmesg, bt, pr, flags)			\
 	_sleep((chan), NULL, (pri), (wmesg), (bt), (pr), (flags))
-void	wakeup(void * chan);
-void	wakeup_one(void * chan);
-void	wakeup_any(void * chan);
+void	wakeup(const void *chan);
+void	wakeup_one(const void *chan);
+void	wakeup_any(const void *chan);
 
 /*
  * Common `struct cdev *' stuff are declared here to avoid #include poisoning
@@ -602,7 +623,7 @@ void _gone_in_dev(struct device *dev, int major, const char *msg);
 #ifdef NO_OBSOLETE_CODE
 #define __gone_ok(m, msg)					 \
 	_Static_assert(m < P_OSREL_MAJOR(__FreeBSD_version)),	 \
-	    "Obsolete code" msg);
+	    "Obsolete code: " msg);
 #else
 #define	__gone_ok(m, msg)
 #endif

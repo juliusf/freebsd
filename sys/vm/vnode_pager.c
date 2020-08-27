@@ -119,9 +119,9 @@ struct pagerops vnodepagerops = {
 
 static struct domainset *vnode_domainset = NULL;
 
-SYSCTL_PROC(_debug, OID_AUTO, vnode_domainset, CTLTYPE_STRING | CTLFLAG_RW,
-    &vnode_domainset, 0, sysctl_handle_domainset, "A",
-    "Default vnode NUMA policy");
+SYSCTL_PROC(_debug, OID_AUTO, vnode_domainset,
+    CTLTYPE_STRING | CTLFLAG_MPSAFE | CTLFLAG_RW, &vnode_domainset, 0,
+    sysctl_handle_domainset, "A", "Default vnode NUMA policy");
 
 static int nvnpbufs;
 SYSCTL_INT(_vm, OID_AUTO, vnode_pbufs, CTLFLAG_RDTUN | CTLFLAG_NOFETCH,
@@ -150,6 +150,7 @@ vnode_create_vobject(struct vnode *vp, off_t isize, struct thread *td)
 	vm_object_t object;
 	vm_ooffset_t size = isize;
 	struct vattr va;
+	bool last;
 
 	if (!vn_isdisk(vp, NULL) && vn_canvmio(vp) == FALSE)
 		return (0);
@@ -171,12 +172,15 @@ vnode_create_vobject(struct vnode *vp, off_t isize, struct thread *td)
 	object = vnode_pager_alloc(vp, size, 0, 0, td->td_ucred);
 	/*
 	 * Dereference the reference we just created.  This assumes
-	 * that the object is associated with the vp.
+	 * that the object is associated with the vp.  We still have
+	 * to serialize with vnode_pager_dealloc() for the last
+	 * potential reference.
 	 */
 	VM_OBJECT_RLOCK(object);
-	refcount_release(&object->ref_count);
+	last = refcount_release(&object->ref_count);
 	VM_OBJECT_RUNLOCK(object);
-	vrele(vp);
+	if (last)
+		vrele(vp);
 
 	KASSERT(vp->v_object != NULL, ("vnode_create_vobject: NULL object"));
 
@@ -196,36 +200,24 @@ vnode_destroy_vobject(struct vnode *vp)
 	MPASS(obj->type == OBJT_VNODE);
 	umtx_shm_object_terminated(obj);
 	if (obj->ref_count == 0) {
+		KASSERT((obj->flags & OBJ_DEAD) == 0,
+		   ("vnode_destroy_vobject: Terminating dead object"));
+		vm_object_set_flag(obj, OBJ_DEAD);
+
 		/*
-		 * don't double-terminate the object
+		 * Clean pages and flush buffers.
 		 */
-		if ((obj->flags & OBJ_DEAD) == 0) {
-			vm_object_set_flag(obj, OBJ_DEAD);
+		vm_object_page_clean(obj, 0, 0, OBJPC_SYNC);
+		VM_OBJECT_WUNLOCK(obj);
 
-			/*
-			 * Clean pages and flush buffers.
-			 */
-			vm_object_page_clean(obj, 0, 0, OBJPC_SYNC);
-			VM_OBJECT_WUNLOCK(obj);
+		vinvalbuf(vp, V_SAVE, 0, 0);
 
-			vinvalbuf(vp, V_SAVE, 0, 0);
+		BO_LOCK(&vp->v_bufobj);
+		vp->v_bufobj.bo_flag |= BO_DEAD;
+		BO_UNLOCK(&vp->v_bufobj);
 
-			BO_LOCK(&vp->v_bufobj);
-			vp->v_bufobj.bo_flag |= BO_DEAD;
-			BO_UNLOCK(&vp->v_bufobj);
-
-			VM_OBJECT_WLOCK(obj);
-			vm_object_terminate(obj);
-		} else {
-			/*
-			 * Waiters were already handled during object
-			 * termination.  The exclusive vnode lock hopefully
-			 * prevented new waiters from referencing the dying
-			 * object.
-			 */
-			vp->v_object = NULL;
-			VM_OBJECT_WUNLOCK(obj);
-		}
+		VM_OBJECT_WLOCK(obj);
+		vm_object_terminate(obj);
 	} else {
 		/*
 		 * Woe to the process that tries to page now :-).
@@ -256,7 +248,7 @@ vnode_pager_alloc(void *handle, vm_ooffset_t size, vm_prot_t prot,
 
 	vp = (struct vnode *)handle;
 	ASSERT_VOP_LOCKED(vp, "vnode_pager_alloc");
-	KASSERT(vp->v_usecount != 0, ("vnode_pager_alloc: no vnode reference"));
+	VNPASS(vp->v_usecount > 0, vp);
 retry:
 	object = vp->v_object;
 
@@ -293,15 +285,17 @@ retry:
 		}
 		vp->v_object = object;
 		VI_UNLOCK(vp);
+		vrefact(vp);
 	} else {
-		VM_OBJECT_WLOCK(object);
-		refcount_acquire(&object->ref_count);
+		vm_object_reference(object);
 #if VM_NRESERVLEVEL > 0
-		vm_object_color(object, 0);
+		if ((object->flags & OBJ_COLORED) == 0) {
+			VM_OBJECT_WLOCK(object);
+			vm_object_color(object, 0);
+			VM_OBJECT_WUNLOCK(object);
+		}
 #endif
-		VM_OBJECT_WUNLOCK(object);
 	}
-	vrefact(vp);
 	return (object);
 }
 
@@ -345,7 +339,7 @@ vnode_pager_dealloc(vm_object_t object)
 		vp->v_writecount = 0;
 	VI_UNLOCK(vp);
 	VM_OBJECT_WUNLOCK(object);
-	while (refs-- > 0)
+	if (refs > 0)
 		vunref(vp);
 	VM_OBJECT_WLOCK(object);
 }
@@ -368,7 +362,7 @@ vnode_pager_haspage(vm_object_t object, vm_pindex_t pindex, int *before,
 	 * If no vp or vp is doomed or marked transparent to VM, we do not
 	 * have the page.
 	 */
-	if (vp == NULL || vp->v_iflag & VI_DOOMED)
+	if (vp == NULL || VN_IS_DOOMED(vp))
 		return FALSE;
 	/*
 	 * If the offset is beyond end of file we do
@@ -547,7 +541,7 @@ vnode_pager_addr(struct vnode *vp, vm_ooffset_t address, daddr_t *rtaddress,
 	if (address < 0)
 		return -1;
 
-	if (vp->v_iflag & VI_DOOMED)
+	if (VN_IS_DOOMED(vp))
 		return -1;
 
 	bsize = vp->v_mount->mnt_stat.f_iosize;
@@ -585,7 +579,7 @@ vnode_pager_input_smlfs(vm_object_t object, vm_page_t m)
 
 	error = 0;
 	vp = object->handle;
-	if (vp->v_iflag & VI_DOOMED)
+	if (VN_IS_DOOMED(vp))
 		return VM_PAGER_BAD;
 
 	bsize = vp->v_mount->mnt_stat.f_iosize;
@@ -634,8 +628,11 @@ vnode_pager_input_smlfs(vm_object_t object, vm_page_t m)
 
 			bwait(bp, PVM, "vnsrd");
 
-			if ((bp->b_ioflags & BIO_ERROR) != 0)
-				error = EIO;
+			if ((bp->b_ioflags & BIO_ERROR) != 0) {
+				KASSERT(bp->b_error != 0,
+				    ("%s: buf error but b_error == 0\n", __func__));
+				error = bp->b_error;
+			}
 
 			/*
 			 * free the buffer header back to the swap buffer pool
@@ -741,12 +738,11 @@ vnode_pager_getpages(vm_object_t object, vm_page_t *m, int count, int *rbehind,
 	struct vnode *vp;
 	int rtval;
 
+	/* Handle is stable with paging in progress. */
 	vp = object->handle;
-	VM_OBJECT_WUNLOCK(object);
 	rtval = VOP_GETPAGES(vp, m, count, rbehind, rahead);
 	KASSERT(rtval != EOPNOTSUPP,
 	    ("vnode_pager: FS getpages not implemented\n"));
-	VM_OBJECT_WLOCK(object);
 	return rtval;
 }
 
@@ -758,11 +754,9 @@ vnode_pager_getpages_async(vm_object_t object, vm_page_t *m, int count,
 	int rtval;
 
 	vp = object->handle;
-	VM_OBJECT_WUNLOCK(object);
 	rtval = VOP_GETPAGES_ASYNC(vp, m, count, rbehind, rahead, iodone, arg);
 	KASSERT(rtval != EOPNOTSUPP,
 	    ("vnode_pager: FS getpages_async not implemented\n"));
-	VM_OBJECT_WLOCK(object);
 	return (rtval);
 }
 
@@ -782,9 +776,13 @@ vnode_pager_local_getpages(struct vop_getpages_args *ap)
 int
 vnode_pager_local_getpages_async(struct vop_getpages_async_args *ap)
 {
+	int error;
 
-	return (vnode_pager_generic_getpages(ap->a_vp, ap->a_m, ap->a_count,
-	    ap->a_rbehind, ap->a_rahead, ap->a_iodone, ap->a_arg));
+	error = vnode_pager_generic_getpages(ap->a_vp, ap->a_m, ap->a_count,
+	    ap->a_rbehind, ap->a_rahead, ap->a_iodone, ap->a_arg);
+	if (error != 0 && ap->a_iodone != NULL)
+		ap->a_iodone(ap->a_arg, ap->a_m, ap->a_count, error);
+	return (error);
 }
 
 /*
@@ -809,7 +807,7 @@ vnode_pager_generic_getpages(struct vnode *vp, vm_page_t *m, int count,
 	KASSERT(vp->v_type != VCHR && vp->v_type != VBLK,
 	    ("%s does not support devices", __func__));
 
-	if (vp->v_iflag & VI_DOOMED)
+	if (VN_IS_DOOMED(vp))
 		return (VM_PAGER_BAD);
 
 	object = vp->v_object;
@@ -1122,7 +1120,9 @@ vnode_pager_generic_getpages_done(struct buf *bp)
 	off_t tfoff, nextoff;
 	int i, error;
 
-	error = (bp->b_ioflags & BIO_ERROR) != 0 ? EIO : 0;
+	KASSERT((bp->b_ioflags & BIO_ERROR) == 0 || bp->b_error != 0,
+	    ("%s: buf error but b_error == 0\n", __func__));
+	error = (bp->b_ioflags & BIO_ERROR) != 0 ? bp->b_error : 0;
 	object = bp->b_vp->v_object;
 
 	if (error == 0 && bp->b_bcount != bp->b_npages * PAGE_SIZE) {
@@ -1137,6 +1137,21 @@ vnode_pager_generic_getpages_done(struct buf *bp)
 	if (buf_mapped(bp)) {
 		pmap_qremove((vm_offset_t)bp->b_data, bp->b_npages);
 		bp->b_data = unmapped_buf;
+	}
+
+	/*
+	 * If the read failed, we must free any read ahead/behind pages here.
+	 * The requested pages are freed by the caller (for sync requests)
+	 * or by the bp->b_pgiodone callback (for async requests).
+	 */
+	if (error != 0) {
+		VM_OBJECT_WLOCK(object);
+		for (i = 0; i < bp->b_pgbefore; i++)
+			vm_page_free_invalid(bp->b_pages[i]);
+		for (i = bp->b_npages - bp->b_pgafter; i < bp->b_npages; i++)
+			vm_page_free_invalid(bp->b_pages[i]);
+		VM_OBJECT_WUNLOCK(object);
+		return (error);
 	}
 
 	/* Read lock to protect size. */
@@ -1178,8 +1193,6 @@ vnode_pager_generic_getpages_done(struct buf *bp)
 			vm_page_readahead_finish(mt);
 	}
 	VM_OBJECT_RUNLOCK(object);
-	if (error != 0)
-		printf("%s: I/O read error %d\n", __func__, error);
 
 	return (error);
 }
@@ -1294,7 +1307,7 @@ vnode_pager_generic_putpages(struct vnode *vp, vm_page_t *ma, int bytecount,
 	 * the last page is partially invalid.  In this case the filesystem
 	 * may not properly clear the dirty bits for the entire page (which
 	 * could be VM_PAGE_BITS_ALL due to the page having been mmap()d).
-	 * With the page locked we are free to fix-up the dirty bits here.
+	 * With the page busied we are free to fix up the dirty bits here.
 	 *
 	 * We do not under any circumstances truncate the valid bits, as
 	 * this will screw up bogus page replacement.
@@ -1583,7 +1596,7 @@ vnode_pager_release_writecount(vm_object_t object, vm_offset_t start,
 	 * vnode's v_writecount is decremented.
 	 */
 	vnode_pager_update_writecount(object, end, start);
-	VOP_UNLOCK(vp, 0);
+	VOP_UNLOCK(vp);
 	vdrop(vp);
 	if (mp != NULL)
 		vn_finished_write(mp);

@@ -37,6 +37,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/kernel.h>
 #include <sys/module.h>
 #include <sys/malloc.h>
+#include <sys/endian.h>
 
 #include <machine/bus.h>
 #include <machine/resource.h>
@@ -178,11 +179,24 @@ static void	vtpci_config_intr(void *);
  * I/O port read/write wrappers.
  */
 #define vtpci_read_config_1(sc, o)	bus_read_1((sc)->vtpci_res, (o))
-#define vtpci_read_config_2(sc, o)	bus_read_2((sc)->vtpci_res, (o))
-#define vtpci_read_config_4(sc, o)	bus_read_4((sc)->vtpci_res, (o))
 #define vtpci_write_config_1(sc, o, v)	bus_write_1((sc)->vtpci_res, (o), (v))
-#define vtpci_write_config_2(sc, o, v)	bus_write_2((sc)->vtpci_res, (o), (v))
-#define vtpci_write_config_4(sc, o, v)	bus_write_4((sc)->vtpci_res, (o), (v))
+
+/*
+ * Virtio-pci specifies that PCI Configuration area is guest endian. However,
+ * since PCI devices are inherently little-endian, on BE systems the bus layer
+ * transparently converts it to BE. For virtio-legacy, this conversion is
+ * undesired, so an extra byte swap is required to fix it.
+ */
+#define vtpci_read_config_2(sc, o)      le16toh(bus_read_2((sc)->vtpci_res, (o)))
+#define vtpci_read_config_4(sc, o)      le32toh(bus_read_4((sc)->vtpci_res, (o)))
+#define vtpci_write_config_2(sc, o, v)  bus_write_2((sc)->vtpci_res, (o), (htole16(v)))
+#define vtpci_write_config_4(sc, o, v)  bus_write_4((sc)->vtpci_res, (o), (htole32(v)))
+
+/* PCI Header LE. On BE systems the bus layer takes care of byte swapping */
+#define vtpci_read_header_2(sc, o)      (bus_read_2((sc)->vtpci_res, (o)))
+#define vtpci_read_header_4(sc, o)      (bus_read_4((sc)->vtpci_res, (o)))
+#define vtpci_write_header_2(sc, o, v)  bus_write_2((sc)->vtpci_res, (o), (v))
+#define vtpci_write_header_4(sc, o, v)  bus_write_4((sc)->vtpci_res, (o), (v))
 
 /* Tunables. */
 static int vtpci_disable_msix = 0;
@@ -447,7 +461,7 @@ vtpci_negotiate_features(device_t dev, uint64_t child_features)
 
 	sc = device_get_softc(dev);
 
-	host_features = vtpci_read_config_4(sc, VIRTIO_PCI_HOST_FEATURES);
+	host_features = vtpci_read_header_4(sc, VIRTIO_PCI_HOST_FEATURES);
 	vtpci_describe_features(sc, "host", host_features);
 
 	/*
@@ -459,7 +473,7 @@ vtpci_negotiate_features(device_t dev, uint64_t child_features)
 	sc->vtpci_features = features;
 
 	vtpci_describe_features(sc, "negotiated", features);
-	vtpci_write_config_4(sc, VIRTIO_PCI_GUEST_FEATURES, features);
+	vtpci_write_header_4(sc, VIRTIO_PCI_GUEST_FEATURES, features);
 
 	return (features);
 }
@@ -502,7 +516,7 @@ vtpci_alloc_virtqueues(device_t dev, int flags, int nvqs,
 		info = &vq_info[idx];
 
 		vtpci_select_virtqueue(sc, idx);
-		size = vtpci_read_config_2(sc, VIRTIO_PCI_QUEUE_NUM);
+		size = vtpci_read_header_2(sc, VIRTIO_PCI_QUEUE_NUM);
 
 		error = virtqueue_alloc(dev, idx, size, VIRTIO_PCI_VRING_ALIGN,
 		    ~(vm_paddr_t)0, info, &vq);
@@ -512,7 +526,7 @@ vtpci_alloc_virtqueues(device_t dev, int flags, int nvqs,
 			break;
 		}
 
-		vtpci_write_config_4(sc, VIRTIO_PCI_QUEUE_PFN,
+		vtpci_write_header_4(sc, VIRTIO_PCI_QUEUE_PFN,
 		    virtqueue_paddr(vq) >> VIRTIO_PCI_QUEUE_ADDR_SHIFT);
 
 		vqx->vtv_vq = *info->vqai_vq = vq;
@@ -646,7 +660,7 @@ vtpci_notify_virtqueue(device_t dev, uint16_t queue)
 
 	sc = device_get_softc(dev);
 
-	vtpci_write_config_2(sc, VIRTIO_PCI_QUEUE_NOTIFY, queue);
+	vtpci_write_header_2(sc, VIRTIO_PCI_QUEUE_NOTIFY, queue);
 }
 
 static uint8_t
@@ -1046,10 +1060,10 @@ vtpci_register_msix_vector(struct vtpci_softc *sc, int offset,
 	} else
 		vector = VIRTIO_MSI_NO_VECTOR;
 
-	vtpci_write_config_2(sc, offset, vector);
+	vtpci_write_header_2(sc, offset, vector);
 
 	/* Read vector to determine if the host had sufficient resources. */
-	if (vtpci_read_config_2(sc, offset) != vector) {
+	if (vtpci_read_header_2(sc, offset) != vector) {
 		device_printf(dev,
 		    "insufficient host resources for MSIX interrupts\n");
 		return (ENODEV);
@@ -1112,13 +1126,13 @@ vtpci_reinit_virtqueue(struct vtpci_softc *sc, int idx)
 	KASSERT(vq != NULL, ("%s: vq %d not allocated", __func__, idx));
 
 	vtpci_select_virtqueue(sc, idx);
-	size = vtpci_read_config_2(sc, VIRTIO_PCI_QUEUE_NUM);
+	size = vtpci_read_header_2(sc, VIRTIO_PCI_QUEUE_NUM);
 
 	error = virtqueue_reinit(vq, size);
 	if (error)
 		return (error);
 
-	vtpci_write_config_4(sc, VIRTIO_PCI_QUEUE_PFN,
+	vtpci_write_header_4(sc, VIRTIO_PCI_QUEUE_PFN,
 	    virtqueue_paddr(vq) >> VIRTIO_PCI_QUEUE_ADDR_SHIFT);
 
 	return (0);
@@ -1182,7 +1196,7 @@ vtpci_free_virtqueues(struct vtpci_softc *sc)
 		vqx = &sc->vtpci_vqs[idx];
 
 		vtpci_select_virtqueue(sc, idx);
-		vtpci_write_config_4(sc, VIRTIO_PCI_QUEUE_PFN, 0);
+		vtpci_write_header_4(sc, VIRTIO_PCI_QUEUE_PFN, 0);
 
 		virtqueue_free(vqx->vtv_vq);
 		vqx->vtv_vq = NULL;
@@ -1207,12 +1221,12 @@ vtpci_cleanup_setup_intr_attempt(struct vtpci_softc *sc)
 	int idx;
 
 	if (sc->vtpci_flags & VTPCI_FLAG_MSIX) {
-		vtpci_write_config_2(sc, VIRTIO_MSI_CONFIG_VECTOR,
+		vtpci_write_header_2(sc, VIRTIO_MSI_CONFIG_VECTOR,
 		    VIRTIO_MSI_NO_VECTOR);
 
 		for (idx = 0; idx < sc->vtpci_nvqs; idx++) {
 			vtpci_select_virtqueue(sc, idx);
-			vtpci_write_config_2(sc, VIRTIO_MSI_QUEUE_VECTOR,
+			vtpci_write_header_2(sc, VIRTIO_MSI_QUEUE_VECTOR,
 			    VIRTIO_MSI_NO_VECTOR);
 		}
 	}
@@ -1235,7 +1249,7 @@ static void
 vtpci_select_virtqueue(struct vtpci_softc *sc, int idx)
 {
 
-	vtpci_write_config_2(sc, VIRTIO_PCI_QUEUE_SEL, idx);
+	vtpci_write_header_2(sc, VIRTIO_PCI_QUEUE_SEL, idx);
 }
 
 static void

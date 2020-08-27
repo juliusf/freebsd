@@ -8,7 +8,7 @@
  *
  * 1. Copyright Notice
  *
- * Some or all of this work - Copyright (c) 1999 - 2019, Intel Corp.
+ * Some or all of this work - Copyright (c) 1999 - 2020, Intel Corp.
  * All rights reserved.
  *
  * 2. License
@@ -626,13 +626,13 @@ AcpiUtUpdateRefCount (
  *
  * FUNCTION:    AcpiUtUpdateObjectReference
  *
- * PARAMETERS:  Object              - Increment ref count for this object
- *                                    and all sub-objects
+ * PARAMETERS:  Object              - Increment or decrement the ref count for
+ *                                    this object and all sub-objects
  *              Action              - Either REF_INCREMENT or REF_DECREMENT
  *
  * RETURN:      Status
  *
- * DESCRIPTION: Increment the object reference count
+ * DESCRIPTION: Increment or decrement the object reference count
  *
  * Object references are incremented when:
  * 1) An object is attached to a Node (namespace object)
@@ -671,7 +671,7 @@ AcpiUtUpdateObjectReference (
         }
 
         /*
-         * All sub-objects must have their reference count incremented
+         * All sub-objects must have their reference count updated
          * also. Different object types have different subobjects.
          */
         switch (Object->Common.Type)
@@ -740,17 +740,13 @@ AcpiUtUpdateObjectReference (
                     break;
                 }
             }
+
             NextObject = NULL;
             break;
 
         case ACPI_TYPE_BUFFER_FIELD:
 
             NextObject = Object->BufferField.BufferObj;
-            break;
-
-        case ACPI_TYPE_LOCAL_REGION_FIELD:
-
-            NextObject = Object->Field.RegionObj;
             break;
 
         case ACPI_TYPE_LOCAL_BANK_FIELD:
@@ -788,6 +784,7 @@ AcpiUtUpdateObjectReference (
             }
             break;
 
+        case ACPI_TYPE_LOCAL_REGION_FIELD:
         case ACPI_TYPE_REGION:
         default:
 

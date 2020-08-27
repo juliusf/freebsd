@@ -70,7 +70,7 @@ end
 -- message on failure.
 function try_include(module)
 	if module:sub(1, 1) ~= "/" then
-		local lua_path = loader.lua_paths
+		local lua_path = loader.lua_path
 		-- XXX Temporary compat shim; this should be removed once the
 		-- loader.lua_path export has sufficiently spread.
 		if lua_path == nil then
@@ -103,6 +103,7 @@ core.KEY_DELETE		= 127
 -- other contexts (outside of Lua) may mean 'octal'
 core.KEYSTR_ESCAPE	= "\027"
 core.KEYSTR_CSI		= core.KEYSTR_ESCAPE .. "["
+core.KEYSTR_RESET	= core.KEYSTR_ESCAPE .. "c"
 
 core.MENU_RETURN	= "return"
 core.MENU_ENTRY		= "entry"

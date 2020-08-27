@@ -113,8 +113,7 @@ static void config_start_include_glob(const char* filename)
 	/* check for wildcards */
 #ifdef HAVE_GLOB
 	glob_t g;
-	size_t i;
-	int r, flags;
+	int i, r, flags;
 	if(!(!strchr(filename, '*') && !strchr(filename, '?') && !strchr(filename, '[') &&
 		!strchr(filename, '{') && !strchr(filename, '~'))) {
 		flags = 0
@@ -145,7 +144,7 @@ static void config_start_include_glob(const char* filename)
 			return;
 		}
 		/* process files found, if any */
-		for(i=0; i<(size_t)g.gl_pathc; i++) {
+		for(i=(int)g.gl_pathc-1; i>=0; i--) {
 			config_start_include(g.gl_pathv[i]);
 		}
 		globfree(&g);
@@ -318,6 +317,12 @@ forward-no-cache{COLON}		{ YDVAR(1, VAR_FORWARD_NO_CACHE) }
 forward-ssl-upstream{COLON}	{ YDVAR(1, VAR_FORWARD_SSL_UPSTREAM) }
 forward-tls-upstream{COLON}	{ YDVAR(1, VAR_FORWARD_SSL_UPSTREAM) }
 auth-zone{COLON}		{ YDVAR(0, VAR_AUTH_ZONE) }
+rpz{COLON}			{ YDVAR(0, VAR_RPZ) }
+tags{COLON}			{ YDVAR(1, VAR_TAGS) }
+rpz-action-override{COLON}	{ YDVAR(1, VAR_RPZ_ACTION_OVERRIDE) }
+rpz-cname-override{COLON}	{ YDVAR(1, VAR_RPZ_CNAME_OVERRIDE) }
+rpz-log{COLON}			{ YDVAR(1, VAR_RPZ_LOG) }
+rpz-log-name{COLON}		{ YDVAR(1, VAR_RPZ_LOG_NAME) }
 zonefile{COLON}			{ YDVAR(1, VAR_ZONEFILE) }
 master{COLON}			{ YDVAR(1, VAR_MASTER) }
 url{COLON}			{ YDVAR(1, VAR_URL) }
@@ -365,6 +370,8 @@ ignore-cd-flag{COLON}		{ YDVAR(1, VAR_IGNORE_CD_FLAG) }
 serve-expired{COLON}		{ YDVAR(1, VAR_SERVE_EXPIRED) }
 serve-expired-ttl{COLON}	{ YDVAR(1, VAR_SERVE_EXPIRED_TTL) }
 serve-expired-ttl-reset{COLON}	{ YDVAR(1, VAR_SERVE_EXPIRED_TTL_RESET) }
+serve-expired-reply-ttl{COLON}	{ YDVAR(1, VAR_SERVE_EXPIRED_REPLY_TTL) }
+serve-expired-client-timeout{COLON}	{ YDVAR(1, VAR_SERVE_EXPIRED_CLIENT_TIMEOUT) }
 fake-dsa{COLON}			{ YDVAR(1, VAR_FAKE_DSA) }
 fake-sha1{COLON}		{ YDVAR(1, VAR_FAKE_SHA1) }
 val-log-level{COLON}		{ YDVAR(1, VAR_VAL_LOG_LEVEL) }
@@ -484,6 +491,9 @@ secret-seed{COLON}		{ YDVAR(1, VAR_CACHEDB_SECRETSEED) }
 redis-server-host{COLON}	{ YDVAR(1, VAR_CACHEDB_REDISHOST) }
 redis-server-port{COLON}	{ YDVAR(1, VAR_CACHEDB_REDISPORT) }
 redis-timeout{COLON}		{ YDVAR(1, VAR_CACHEDB_REDISTIMEOUT) }
+ipset{COLON}			{ YDVAR(0, VAR_IPSET) }
+name-v4{COLON}			{ YDVAR(1, VAR_IPSET_NAME_V4) }
+name-v6{COLON}			{ YDVAR(1, VAR_IPSET_NAME_V6) }
 udp-upstream-without-downstream{COLON} { YDVAR(1, VAR_UDP_UPSTREAM_WITHOUT_DOWNSTREAM) }
 tcp-connection-limit{COLON}	{ YDVAR(2, VAR_TCP_CONNECTION_LIMIT) }
 <INITIAL,val>{NEWLINE}		{ LEXOUT(("NL\n")); cfg_parser->line++; }

@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
  *
  * Copyright 2018 Emmanuel Vadot <manu@FreeBSD.org>
- * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -54,6 +53,7 @@ struct rk_clk_composite_def {
 #define	RK_CLK_COMPOSITE_HAVE_GATE	0x0002
 #define	RK_CLK_COMPOSITE_DIV_EXP	0x0004	/* Register   0, 1, 2, 2, ... */
 						/* Divider    1, 2, 4, 8, ... */
+#define	RK_CLK_COMPOSITE_GRF		0x0008 /* Use syscon registers instead of CRU's */
 int rk_clk_composite_register(struct clkdom *clkdom,
     struct rk_clk_composite_def *clkdef);
 

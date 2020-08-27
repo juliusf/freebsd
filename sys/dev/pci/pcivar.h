@@ -1,8 +1,7 @@
 /*-
  * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
  *
- * Copyright (c) 1997, Stefan Esser <se@freebsd.org>
- * All rights reserved.
+ * Copyright 1997, Stefan Esser <se@freebsd.org>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -258,6 +257,7 @@ typedef struct {
 } pcih2cfgregs;
 
 extern uint32_t pci_numdevs;
+extern int pci_enable_aspm;
 
 /*
  * The bitfield has to be stable and match the fields below (so that
@@ -686,6 +686,7 @@ uint32_t pcie_read_config(device_t dev, int reg, int width);
 void	pcie_write_config(device_t dev, int reg, uint32_t value, int width);
 uint32_t pcie_adjust_config(device_t dev, int reg, uint32_t mask,
 	    uint32_t value, int width);
+void	pcie_apei_error(device_t dev, int sev, uint8_t *aer);
 bool	pcie_flr(device_t dev, u_int max_delay, bool force);
 int	pcie_get_max_completion_timeout(device_t dev);
 bool	pcie_wait_for_pending_transactions(device_t dev, u_int max_delay);

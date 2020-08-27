@@ -93,7 +93,7 @@ static MALLOC_DEFINE(M_NETGRAPH_IFACE, "netgraph_iface", "netgraph iface node");
 #define M_NETGRAPH_IFACE M_NETGRAPH
 #endif
 
-static SYSCTL_NODE(_net_graph, OID_AUTO, iface, CTLFLAG_RW, 0,
+static SYSCTL_NODE(_net_graph, OID_AUTO, iface, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
     "Point to point netgraph interface");
 VNET_DEFINE_STATIC(int, ng_iface_max_nest) = 2;
 #define	V_ng_iface_max_nest	VNET(ng_iface_max_nest)
@@ -111,8 +111,6 @@ typedef const struct iffam *iffam_p;
 const static struct iffam gFamilies[] = {
 	{ AF_INET,	NG_IFACE_HOOK_INET	},
 	{ AF_INET6,	NG_IFACE_HOOK_INET6	},
-	{ AF_ATM,	NG_IFACE_HOOK_ATM	},
-	{ AF_NATM,	NG_IFACE_HOOK_NATM	},
 };
 #define	NUM_FAMILIES		nitems(gFamilies)
 
@@ -732,9 +730,11 @@ ng_iface_rcvdata(hook_p hook, item_p item)
 	}
 	random_harvest_queue(m, sizeof(*m), RANDOM_NET_NG);
 	M_SETFIB(m, ifp->if_fib);
+	CURVNET_SET(ifp->if_vnet);
 	NET_EPOCH_ENTER(et);
 	netisr_dispatch(isr, m);
 	NET_EPOCH_EXIT(et);
+	CURVNET_RESTORE();
 	return (0);
 }
 

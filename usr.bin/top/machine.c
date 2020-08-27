@@ -211,6 +211,10 @@ static long *pcpu_cp_old;
 static long *pcpu_cp_diff;
 static int *pcpu_cpu_states;
 
+/* Battery units and states */
+static int battery_units;
+static int battery_life;
+
 static int compare_swap(const void *a, const void *b);
 static int compare_jid(const void *a, const void *b);
 static int compare_pid(const void *a, const void *b);
@@ -278,10 +282,7 @@ machine_init(struct statics *statics)
 	size_t size;
 
 	size = sizeof(smpmode);
-	if ((sysctlbyname("machdep.smp_active", &smpmode, &size,
-	    NULL, 0) != 0 &&
-	    sysctlbyname("kern.smp.active", &smpmode, &size,
-	    NULL, 0) != 0) ||
+	if (sysctlbyname("kern.smp.active", &smpmode, &size, NULL, 0) != 0 ||
 	    size != sizeof(smpmode))
 		smpmode = 0;
 
@@ -372,6 +373,12 @@ machine_init(struct statics *statics)
 	pcpu_cp_diff = calloc(ncpus * CPUSTATES, sizeof(long));
 	pcpu_cpu_states = calloc(ncpus * CPUSTATES, sizeof(int));
 	statics->ncpus = ncpus;
+
+	/* Allocate state of battery units reported via ACPI. */
+	battery_units = 0;
+	size = sizeof(int);
+	sysctlbyname("hw.acpi.battery.units", &battery_units, &size, NULL, 0);
+	statics->nbatteries = battery_units;
 
 	update_layout();
 
@@ -579,6 +586,12 @@ get_system_info(struct system_info *si)
 	} else {
 		si->boottime.tv_sec = -1;
 	}
+
+	battery_life = 0;
+	if (battery_units > 0) {
+		GETSYSCTL("hw.acpi.battery.life", battery_life);
+	}
+	si->battery = battery_life;
 }
 
 #define NOPROC	((void *)-1)
@@ -1003,7 +1016,7 @@ format_next_process(struct handle * xhandle, char *(*get_userid)(int), int flags
 				len = (argbuflen - (dst - argbuf) - 1) / 4;
 				strvisx(dst, src,
 				    MIN(strlen(src), len),
-				    VIS_NL | VIS_CSTYLE | VIS_OCTAL | VIS_SAFE);
+				    VIS_NL | VIS_TAB | VIS_CSTYLE | VIS_OCTAL);
 				while (*dst != '\0')
 					dst++;
 				if ((argbuflen - (dst - argbuf) - 1) / 4 > 0)

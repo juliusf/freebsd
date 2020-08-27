@@ -1,4 +1,4 @@
-#!/usr/local/bin/python2
+#!/usr/local/bin/python3
 #
 # Copyright (c) 2014 The FreeBSD Foundation
 # Copyright 2014 John-Mark Gurney
@@ -31,7 +31,7 @@
 # $FreeBSD$
 #
 
-from __future__ import print_function
+
 import array
 import binascii
 from fcntl import ioctl
@@ -643,8 +643,7 @@ if __name__ == '__main__':
         tag = _spdechex('0032a1dc85f1c9786925a2e71d8272dd')
         tag = _spdechex('8d11a0929cb3fbe1fef01a4a38d5f8ea')
 
-        c = Crypto(CRYPTO_AES_NIST_GCM_16, key,
-            mac=CRYPTO_AES_128_NIST_GMAC, mackey=key)
+        c = Crypto(CRYPTO_AES_NIST_GCM_16, key)
 
         enc, enctag = c.encrypt(pt, iv, aad=aad)
 
@@ -680,7 +679,7 @@ if __name__ == '__main__':
         ct = _spdechex('93fe7d9e9bfd10348a5606e5cafa7354')
         tag = _spdechex('0032a1dc85f1c9786925a2e71d8272dd')
 
-        c = Crypto(CRYPTO_AES_GCM_16, key, mac=CRYPTO_AES_128_GMAC, mackey=key)
+        c = Crypto(CRYPTO_AES_GCM_16, key)
 
         enc, enctag = c.encrypt(pt, iv, aad=aad)
 

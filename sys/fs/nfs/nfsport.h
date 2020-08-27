@@ -98,16 +98,10 @@
 #include <netinet/tcp_timer.h>
 #include <netinet/tcp_var.h>
 #include <machine/in_cksum.h>
-#include <crypto/des/des.h>
 #include <sys/md5.h>
 #include <rpc/rpc.h>
 #include <rpc/rpcsec_gss.h>
 
-/*
- * For Darwin, these functions should be "static" when built in a kext.
- * (This is always defined as nil otherwise.)
- */
-#define	APPLESTATIC
 #include <ufs/ufs/dir.h>
 #include <ufs/ufs/quota.h>
 #include <ufs/ufs/inode.h>
@@ -115,8 +109,12 @@
 #include <ufs/ufs/ufsmount.h>
 #include <vm/uma.h>
 #include <vm/vm.h>
-#include <vm/vm_object.h>
+#include <vm/pmap.h>
 #include <vm/vm_extern.h>
+#include <vm/vm_object.h>
+#include <vm/vm_page.h>
+#include <vm/vm_pageout.h>
+#include <vm/vm_param.h>
 #include <nfs/nfssvc.h>
 #include "opt_nfs.h"
 #include "opt_ufs.h"
@@ -172,7 +170,6 @@
 			MGETHDR((m), M_WAITOK, MT_DATA); 	\
 		} 						\
 	} while (0)
-#define	NFSMTOD	mtod
 
 /*
  * Client side constant for size of a lockowner name.
@@ -257,10 +254,39 @@
 
 /*
  * Must be one more than last op#.
- * NFSv4.2 isn't implemented yet, but define the op# limit for it.
  */
 #define	NFSV41_NOPS		59
-#define	NFSV42_NOPS		72
+
+/*
+ * Additional operations for NFSv4.2.
+ */
+#define	NFSV4OP_ALLOCATE	59
+#define	NFSV4OP_COPY		60
+#define	NFSV4OP_COPYNOTIFY	61
+#define	NFSV4OP_DEALLOCATE	62
+#define	NFSV4OP_IOADVISE	63
+#define	NFSV4OP_LAYOUTERROR	64
+#define	NFSV4OP_LAYOUTSTATS	65
+#define	NFSV4OP_OFFLOADCANCEL	66
+#define	NFSV4OP_OFFLOADSTATUS	67
+#define	NFSV4OP_READPLUS	68
+#define	NFSV4OP_SEEK		69
+#define	NFSV4OP_WRITESAME	70
+#define	NFSV4OP_CLONE		71
+
+/* One greater than the last Operation # defined in RFC-7862. */
+#define	NFSV42_PURENOPS		72
+
+/* and the optional Extended attribute operations (RFC-8276). */
+#define	NFSV4OP_GETXATTR	72
+#define	NFSV4OP_SETXATTR	73
+#define	NFSV4OP_LISTXATTRS	74
+#define	NFSV4OP_REMOVEXATTR	75
+
+/*
+ * Must be one more than the last NFSv4.2 op#.
+ */
+#define	NFSV42_NOPS		76
 
 /* Quirky case if the illegal op code */
 #define	NFSV4OP_OPILLEGAL	10044
@@ -309,6 +335,12 @@
 #define	NFSV4OP_CBNOTIFYDEVID	14
 
 #define	NFSV41_CBNOPS		15
+
+/*
+ * Additional callback operations for NFSv4.2.
+ */
+#define	NFSV4OP_CBOFFLOAD	15
+
 #define	NFSV42_CBNOPS		16
 
 /*
@@ -367,13 +399,31 @@
  */
 #define	NFSV41_NPROCS		56
 
+/* Additional procedures for NFSv4.2. */
+#define	NFSPROC_IOADVISE	56
+#define	NFSPROC_ALLOCATE	57
+#define	NFSPROC_COPY		58
+#define	NFSPROC_SEEK		59
+#define	NFSPROC_SEEKDS		60
+
+/* and the ones for the optional Extended attribute support (RFC-8276). */
+#define	NFSPROC_GETEXTATTR	61
+#define	NFSPROC_SETEXTATTR	62
+#define	NFSPROC_RMEXTATTR	63
+#define	NFSPROC_LISTEXTATTR	64
+
+/*
+ * Must be defined as one higher than the last NFSv4.2 Proc# above.
+ */
+#define	NFSV42_NPROCS		65
+
 #endif	/* NFS_V3NPROCS */
 
 /*
- * New stats structure.
+ * Newest stats structure.
  * The vers field will be set to NFSSTATS_V1 by the caller.
  */
-#define	NFSSTATS_V1	1
+#define	NFSSTATS_V1	2
 struct nfsstatsv1 {
 	int		vers;	/* Set to version requested by caller. */
 	uint64_t	attrcache_hits;
@@ -394,9 +444,74 @@ struct nfsstatsv1 {
 	uint64_t	readlink_bios;
 	uint64_t	biocache_readdirs;
 	uint64_t	readdir_bios;
-	uint64_t	rpccnt[NFSV41_NPROCS + 13];
+	uint64_t	rpccnt[NFSV42_NPROCS + 15];
 	uint64_t	rpcretries;
-	uint64_t	srvrpccnt[NFSV42_NOPS + NFSV4OP_FAKENOPS];
+	uint64_t	srvrpccnt[NFSV42_NOPS + NFSV4OP_FAKENOPS + 15];
+	uint64_t	srvrpc_errs;
+	uint64_t	srv_errs;
+	uint64_t	rpcrequests;
+	uint64_t	rpctimeouts;
+	uint64_t	rpcunexpected;
+	uint64_t	rpcinvalid;
+	uint64_t	srvcache_inproghits;
+	uint64_t	srvcache_idemdonehits;
+	uint64_t	srvcache_nonidemdonehits;
+	uint64_t	srvcache_misses;
+	uint64_t	srvcache_tcppeak;
+	int		srvcache_size;	/* Updated by atomic_xx_int(). */
+	uint64_t	srvclients;
+	uint64_t	srvopenowners;
+	uint64_t	srvopens;
+	uint64_t	srvlockowners;
+	uint64_t	srvlocks;
+	uint64_t	srvdelegates;
+	uint64_t	cbrpccnt[NFSV42_CBNOPS + 10];
+	uint64_t	clopenowners;
+	uint64_t	clopens;
+	uint64_t	cllockowners;
+	uint64_t	cllocks;
+	uint64_t	cldelegates;
+	uint64_t	cllocalopenowners;
+	uint64_t	cllocalopens;
+	uint64_t	cllocallockowners;
+	uint64_t	cllocallocks;
+	uint64_t	srvstartcnt;
+	uint64_t	srvdonecnt;
+	uint64_t	srvbytes[NFSV42_NOPS + NFSV4OP_FAKENOPS + 15];
+	uint64_t	srvops[NFSV42_NOPS + NFSV4OP_FAKENOPS + 15];
+	struct bintime	srvduration[NFSV42_NOPS + NFSV4OP_FAKENOPS + 15];
+	struct bintime	busyfrom;
+	struct bintime	busytime;
+};
+
+/*
+ * Newer stats structure.
+ * The vers field will be set to NFSSTATS_OV1 by the caller.
+ */
+#define	NFSSTATS_OV1	1
+struct nfsstatsov1 {
+	int		vers;	/* Set to version requested by caller. */
+	uint64_t	attrcache_hits;
+	uint64_t	attrcache_misses;
+	uint64_t	lookupcache_hits;
+	uint64_t	lookupcache_misses;
+	uint64_t	direofcache_hits;
+	uint64_t	direofcache_misses;
+	uint64_t	accesscache_hits;
+	uint64_t	accesscache_misses;
+	uint64_t	biocache_reads;
+	uint64_t	read_bios;
+	uint64_t	read_physios;
+	uint64_t	biocache_writes;
+	uint64_t	write_bios;
+	uint64_t	write_physios;
+	uint64_t	biocache_readlinks;
+	uint64_t	readlink_bios;
+	uint64_t	biocache_readdirs;
+	uint64_t	readdir_bios;
+	uint64_t	rpccnt[NFSV42_NPROCS + 4];
+	uint64_t	rpcretries;
+	uint64_t	srvrpccnt[NFSV42_PURENOPS + NFSV4OP_FAKENOPS];
 	uint64_t	srvrpc_errs;
 	uint64_t	srv_errs;
 	uint64_t	rpcrequests;
@@ -427,9 +542,9 @@ struct nfsstatsv1 {
 	uint64_t	cllocallocks;
 	uint64_t	srvstartcnt;
 	uint64_t	srvdonecnt;
-	uint64_t	srvbytes[NFSV42_NOPS + NFSV4OP_FAKENOPS];
-	uint64_t	srvops[NFSV42_NOPS + NFSV4OP_FAKENOPS];
-	struct bintime	srvduration[NFSV42_NOPS + NFSV4OP_FAKENOPS];
+	uint64_t	srvbytes[NFSV42_PURENOPS + NFSV4OP_FAKENOPS];
+	uint64_t	srvops[NFSV42_PURENOPS + NFSV4OP_FAKENOPS];
+	struct bintime	srvduration[NFSV42_PURENOPS + NFSV4OP_FAKENOPS];
 	struct bintime	busyfrom;
 	struct bintime	busytime;
 };
@@ -538,6 +653,7 @@ struct nfsvattr {
 #define	na_atime	na_vattr.va_atime
 #define	na_mtime	na_vattr.va_mtime
 #define	na_ctime	na_vattr.va_ctime
+#define	na_btime	na_vattr.va_birthtime
 #define	na_gen		na_vattr.va_gen
 #define	na_flags	na_vattr.va_flags
 #define	na_rdev		na_vattr.va_rdev
@@ -669,6 +785,7 @@ void nfsrvd_rcv(struct socket *, void *, int);
 #define	NFSLOCKSOCK()		mtx_lock(&nfs_slock_mutex)
 #define	NFSUNLOCKSOCK()		mtx_unlock(&nfs_slock_mutex)
 #define	NFSNAMEIDMUTEX		extern struct mtx nfs_nameid_mutex
+#define	NFSNAMEIDMUTEXPTR	(&nfs_nameid_mutex)
 #define	NFSLOCKNAMEID()		mtx_lock(&nfs_nameid_mutex)
 #define	NFSUNLOCKNAMEID()	mtx_unlock(&nfs_nameid_mutex)
 #define	NFSNAMEIDREQUIRED()	mtx_assert(&nfs_nameid_mutex, MA_OWNED)
@@ -940,11 +1057,6 @@ bool ncl_pager_setsize(struct vnode *vp, u_quad_t *nsizep);
 				    (n)->nm_minorvers > 0)
 
 /*
- * Gets the stats field out of the mount structure.
- */
-#define	vfs_statfs(m)	(&((m)->mnt_stat))
-
-/*
  * Set boottime.
  */
 #define	NFSSETBOOTTIME(b)	(getboottime(&b))
@@ -967,6 +1079,11 @@ bool ncl_pager_setsize(struct vnode *vp, u_quad_t *nsizep);
 struct nfsex_args {
 	char	*fspec;
 	struct export_args	export;
+};
+
+struct nfsex_oldargs {
+	char	*fspec;
+	struct o2export_args	export;
 };
 
 /*
@@ -997,7 +1114,7 @@ void nfsd_mntinit(void);
  * later, for debugging or stats, etc.
  */
 #define	NFSVOPLOCK(v, f)	vn_lock((v), (f))
-#define	NFSVOPUNLOCK(v, f)	VOP_UNLOCK((v), (f))
+#define	NFSVOPUNLOCK(v)		VOP_UNLOCK((v))
 #define	NFSVOPISLOCKED(v)	VOP_ISLOCKED((v))
 
 /*

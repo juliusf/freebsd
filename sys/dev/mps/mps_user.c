@@ -75,6 +75,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/bus.h>
 #include <sys/conf.h>
 #include <sys/bio.h>
+#include <sys/abi_compat.h>
 #include <sys/malloc.h>
 #include <sys/uio.h>
 #include <sys/sysctl.h>
@@ -179,16 +180,6 @@ static int mps_user_reg_access(struct mps_softc *sc, mps_reg_access_t *data);
 static int mps_user_btdh(struct mps_softc *sc, mps_btdh_mapping_t *data);
 
 MALLOC_DEFINE(M_MPSUSER, "mps_user", "Buffers for mps(4) ioctls");
-
-/* Macros from compat/freebsd32/freebsd32.h */
-#define	PTRIN(v)	(void *)(uintptr_t)(v)
-#define	PTROUT(v)	(uint32_t)(uintptr_t)(v)
-
-#define	CP(src,dst,fld) do { (dst).fld = (src).fld; } while (0)
-#define	PTRIN_CP(src,dst,fld)				\
-	do { (dst).fld = PTRIN((src).fld); } while (0)
-#define	PTROUT_CP(src,dst,fld) \
-	do { (dst).fld = PTROUT((src).fld); } while (0)
 
 int
 mps_attach_user(struct mps_softc *sc)
@@ -1445,13 +1436,6 @@ mps_diag_register(struct mps_softc *sc, mps_fw_diag_register_t *diag_register,
         bzero(sc->fw_diag_buffer, buffer_size);
 
 	ctx = malloc(sizeof(*ctx), M_MPSUSER, M_WAITOK | M_ZERO);
-	if (ctx == NULL) {
-		device_printf(sc->mps_dev, "%s: context malloc failed\n",
-		    __func__);
-		*return_code = MPS_FW_DIAG_ERROR_NO_BUFFER;
-		status = MPS_DIAG_FAILURE;
-		goto bailout;
-	}
 	ctx->addr = &sc->fw_diag_busaddr;
 	ctx->buffer_dmat = sc->fw_diag_dmat;
 	ctx->buffer_dmamap = sc->fw_diag_map;

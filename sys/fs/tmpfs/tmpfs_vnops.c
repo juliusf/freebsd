@@ -55,6 +55,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/sysctl.h>
 #include <sys/unistd.h>
 #include <sys/vnode.h>
+#include <sys/smr.h>
 
 #include <vm/vm.h>
 #include <vm/vm_param.h>
@@ -64,6 +65,7 @@ __FBSDID("$FreeBSD$");
 #include <fs/tmpfs/tmpfs.h>
 
 SYSCTL_DECL(_vfs_tmpfs);
+VFS_SMR_DECLARE;
 
 static volatile int tmpfs_rename_restarts;
 SYSCTL_INT(_vfs_tmpfs, OID_AUTO, rename_restarts, CTLFLAG_RD,
@@ -90,7 +92,7 @@ tmpfs_lookup1(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp)
 	*vpp = NULLVP;
 
 	/* Check accessibility of requested node as a first step. */
-	error = VOP_ACCESS(dvp, VEXEC, cnp->cn_cred, cnp->cn_thread);
+	error = vn_dir_check_exec(dvp, cnp);
 	if (error != 0)
 		goto out;
 
@@ -317,19 +319,51 @@ tmpfs_close(struct vop_close_args *v)
 	return (0);
 }
 
+/*
+ * VOP_FPLOOKUP_VEXEC routines are subject to special circumstances, see
+ * the comment above cache_fplookup for details.
+ */
+int
+tmpfs_fplookup_vexec(struct vop_fplookup_vexec_args *v)
+{
+	struct vnode *vp;
+	struct tmpfs_node *node;
+	struct ucred *cred;
+	mode_t all_x, mode;
+
+	vp = v->a_vp;
+	node = VP_TO_TMPFS_NODE_SMR(vp);
+	if (__predict_false(node == NULL))
+		return (EAGAIN);
+
+	all_x = S_IXUSR | S_IXGRP | S_IXOTH;
+	mode = atomic_load_short(&node->tn_mode);
+	if (__predict_true((mode & all_x) == all_x))
+		return (0);
+
+	cred = v->a_cred;
+	return (vaccess_vexec_smr(mode, node->tn_uid, node->tn_gid, cred));
+}
+
 int
 tmpfs_access(struct vop_access_args *v)
 {
 	struct vnode *vp = v->a_vp;
 	accmode_t accmode = v->a_accmode;
 	struct ucred *cred = v->a_cred;
-
+	mode_t all_x = S_IXUSR | S_IXGRP | S_IXOTH;
 	int error;
 	struct tmpfs_node *node;
 
 	MPASS(VOP_ISLOCKED(vp));
 
 	node = VP_TO_TMPFS_NODE(vp);
+
+	/*
+	 * Common case path lookup.
+	 */
+	if (__predict_true(accmode == VEXEC && (node->tn_mode & all_x) == all_x))
+		return (0);
 
 	switch (vp->v_type) {
 	case VDIR:
@@ -362,8 +396,8 @@ tmpfs_access(struct vop_access_args *v)
 		goto out;
 	}
 
-	error = vaccess(vp->v_type, node->tn_mode, node->tn_uid,
-	    node->tn_gid, accmode, cred, NULL);
+	error = vaccess(vp->v_type, node->tn_mode, node->tn_uid, node->tn_gid,
+	    accmode, cred);
 
 out:
 	MPASS(VOP_ISLOCKED(vp));
@@ -381,7 +415,7 @@ tmpfs_getattr(struct vop_getattr_args *v)
 
 	node = VP_TO_TMPFS_NODE(vp);
 
-	tmpfs_update(vp);
+	tmpfs_update_getattr(vp);
 
 	vap->va_type = vp->v_type;
 	vap->va_mode = node->tn_mode;
@@ -421,6 +455,7 @@ tmpfs_setattr(struct vop_setattr_args *v)
 	int error;
 
 	MPASS(VOP_ISLOCKED(vp));
+	ASSERT_VOP_IN_SEQC(vp);
 
 	error = 0;
 
@@ -491,6 +526,7 @@ tmpfs_write(struct vop_write_args *v)
 	struct tmpfs_node *node;
 	off_t oldsize;
 	int error, ioflag;
+	mode_t newmode;
 
 	vp = v->a_vp;
 	uio = v->a_uio;
@@ -521,8 +557,12 @@ tmpfs_write(struct vop_write_args *v)
 	node->tn_status |= TMPFS_NODE_ACCESSED | TMPFS_NODE_MODIFIED |
 	    TMPFS_NODE_CHANGED;
 	if (node->tn_mode & (S_ISUID | S_ISGID)) {
-		if (priv_check_cred(v->a_cred, PRIV_VFS_RETAINSUGID))
-			node->tn_mode &= ~(S_ISUID | S_ISGID);
+		if (priv_check_cred(v->a_cred, PRIV_VFS_RETAINSUGID)) {
+			newmode = node->tn_mode & ~(S_ISUID | S_ISGID);
+			vn_seqc_write_begin(vp);
+			atomic_store_short(&node->tn_mode, newmode);
+			vn_seqc_write_end(vp);
+		}
 	}
 	if (error != 0)
 		(void)tmpfs_reg_resize(vp, oldsize, TRUE);
@@ -668,9 +708,9 @@ tmpfs_rename_relock(struct vnode *fdvp, struct vnode **fvpp,
 	struct tmpfs_dirent *de;
 	int error, restarts = 0;
 
-	VOP_UNLOCK(tdvp, 0);
+	VOP_UNLOCK(tdvp);
 	if (*tvpp != NULL && *tvpp != tdvp)
-		VOP_UNLOCK(*tvpp, 0);
+		VOP_UNLOCK(*tvpp);
 	mp = fdvp->v_mount;
 
 relock:
@@ -679,11 +719,11 @@ relock:
 	if (error)
 		goto releout;
 	if (vn_lock(tdvp, LK_EXCLUSIVE | LK_NOWAIT) != 0) {
-		VOP_UNLOCK(fdvp, 0);
+		VOP_UNLOCK(fdvp);
 		error = vn_lock(tdvp, LK_EXCLUSIVE);
 		if (error)
 			goto releout;
-		VOP_UNLOCK(tdvp, 0);
+		VOP_UNLOCK(tdvp);
 		goto relock;
 	}
 	/*
@@ -692,8 +732,8 @@ relock:
 	 */
 	de = tmpfs_dir_lookup(VP_TO_TMPFS_DIR(fdvp), NULL, fcnp);
 	if (de == NULL) {
-		VOP_UNLOCK(fdvp, 0);
-		VOP_UNLOCK(tdvp, 0);
+		VOP_UNLOCK(fdvp);
+		VOP_UNLOCK(tdvp);
 		if ((fcnp->cn_flags & ISDOTDOT) != 0 ||
 		    (fcnp->cn_namelen == 1 && fcnp->cn_nameptr[0] == '.'))
 			error = EINVAL;
@@ -703,14 +743,14 @@ relock:
 	}
 	error = tmpfs_alloc_vp(mp, de->td_node, LK_EXCLUSIVE | LK_NOWAIT, &nvp);
 	if (error != 0) {
-		VOP_UNLOCK(fdvp, 0);
-		VOP_UNLOCK(tdvp, 0);
+		VOP_UNLOCK(fdvp);
+		VOP_UNLOCK(tdvp);
 		if (error != EBUSY)
 			goto releout;
 		error = tmpfs_alloc_vp(mp, de->td_node, LK_EXCLUSIVE, &nvp);
 		if (error != 0)
 			goto releout;
-		VOP_UNLOCK(nvp, 0);
+		VOP_UNLOCK(nvp);
 		/*
 		 * Concurrent rename race.
 		 */
@@ -725,7 +765,7 @@ relock:
 	}
 	vrele(*fvpp);
 	*fvpp = nvp;
-	VOP_UNLOCK(*fvpp, 0);
+	VOP_UNLOCK(*fvpp);
 	/*
 	 * Re-resolve tvp and acquire the vnode lock if present.
 	 */
@@ -749,15 +789,15 @@ relock:
 			vrele(*tvpp);
 		*tvpp = nvp;
 		if (error != 0) {
-			VOP_UNLOCK(fdvp, 0);
-			VOP_UNLOCK(tdvp, 0);
+			VOP_UNLOCK(fdvp);
+			VOP_UNLOCK(tdvp);
 			if (error != EBUSY)
 				goto releout;
 			error = tmpfs_alloc_vp(mp, de->td_node, LK_EXCLUSIVE,
 			    &nvp);
 			if (error != 0)
 				goto releout;
-			VOP_UNLOCK(nvp, 0);
+			VOP_UNLOCK(nvp);
 			/*
 			 * fdvp contains fvp, thus tvp (=fdvp) is not empty.
 			 */
@@ -792,7 +832,6 @@ tmpfs_rename(struct vop_rename_args *v)
 	struct vnode *tdvp = v->a_tdvp;
 	struct vnode *tvp = v->a_tvp;
 	struct componentname *tcnp = v->a_tcnp;
-	struct mount *mp = NULL;
 	char *newname;
 	struct tmpfs_dirent *de;
 	struct tmpfs_mount *tmp;
@@ -801,11 +840,14 @@ tmpfs_rename(struct vop_rename_args *v)
 	struct tmpfs_node *tnode;
 	struct tmpfs_node *tdnode;
 	int error;
+	bool want_seqc_end;
 
 	MPASS(VOP_ISLOCKED(tdvp));
 	MPASS(IMPLIES(tvp != NULL, VOP_ISLOCKED(tvp)));
 	MPASS(fcnp->cn_flags & HASBUF);
 	MPASS(tcnp->cn_flags & HASBUF);
+
+	want_seqc_end = false;
 
 	/*
 	 * Disallow cross-device renames.
@@ -829,18 +871,10 @@ tmpfs_rename(struct vop_rename_args *v)
 	 */
 	if (fdvp != tdvp && fdvp != tvp) {
 		if (vn_lock(fdvp, LK_EXCLUSIVE | LK_NOWAIT) != 0) {
-			mp = tdvp->v_mount;
-			error = vfs_busy(mp, 0);
-			if (error != 0) {
-				mp = NULL;
-				goto out;
-			}
 			error = tmpfs_rename_relock(fdvp, &fvp, tdvp, &tvp,
 			    fcnp, tcnp);
-			if (error != 0) {
-				vfs_unbusy(mp);
+			if (error != 0)
 				return (error);
-			}
 			ASSERT_VOP_ELOCKED(fdvp,
 			    "tmpfs_rename: fdvp not locked");
 			ASSERT_VOP_ELOCKED(tdvp,
@@ -854,6 +888,13 @@ tmpfs_rename(struct vop_rename_args *v)
 			}
 		}
 	}
+
+	if (tvp != NULL)
+		vn_seqc_write_begin(tvp);
+	vn_seqc_write_begin(tdvp);
+	vn_seqc_write_begin(fvp);
+	vn_seqc_write_begin(fdvp);
+	want_seqc_end = true;
 
 	tmp = VFS_TO_TMPFS(tdvp->v_mount);
 	tdnode = VP_TO_TMPFS_DIR(tdvp);
@@ -1065,9 +1106,17 @@ tmpfs_rename(struct vop_rename_args *v)
 
 out_locked:
 	if (fdvp != tdvp && fdvp != tvp)
-		VOP_UNLOCK(fdvp, 0);
+		VOP_UNLOCK(fdvp);
 
 out:
+	if (want_seqc_end) {
+		if (tvp != NULL)
+			vn_seqc_write_end(tvp);
+		vn_seqc_write_end(tdvp);
+		vn_seqc_write_end(fvp);
+		vn_seqc_write_end(fdvp);
+	}
+
 	/*
 	 * Release target nodes.
 	 * XXX: I don't understand when tdvp can be the same as tvp, but
@@ -1083,9 +1132,6 @@ out:
 	/* Release source nodes. */
 	vrele(fdvp);
 	vrele(fvp);
-
-	if (mp != NULL)
-		vfs_unbusy(mp);
 
 	return (error);
 }
@@ -1441,16 +1487,28 @@ tmpfs_pathconf(struct vop_pathconf_args *v)
 
 static int
 tmpfs_vptofh(struct vop_vptofh_args *ap)
+/*
+vop_vptofh {
+	IN struct vnode *a_vp;
+	IN struct fid *a_fhp;
+};
+*/
 {
-	struct tmpfs_fid *tfhp;
+	struct tmpfs_fid_data tfd;
 	struct tmpfs_node *node;
+	struct fid *fhp;
 
-	tfhp = (struct tmpfs_fid *)ap->a_fhp;
 	node = VP_TO_TMPFS_NODE(ap->a_vp);
+	fhp = ap->a_fhp;
+	fhp->fid_len = sizeof(tfd);
 
-	tfhp->tf_len = sizeof(struct tmpfs_fid);
-	tfhp->tf_id = node->tn_id;
-	tfhp->tf_gen = node->tn_gen;
+	/*
+	 * Copy into fid_data from the stack to avoid unaligned pointer use.
+	 * See the comment in sys/mount.h on struct fid for details.
+	 */
+	tfd.tfd_id = node->tn_id;
+	tfd.tfd_gen = node->tn_gen;
+	memcpy(fhp->fid_data, &tfd, fhp->fid_len);
 
 	return (0);
 }
@@ -1497,7 +1555,7 @@ tmpfs_vptocnp_dir(struct tmpfs_node *tn, struct tmpfs_node *tnp,
 
 static int
 tmpfs_vptocnp_fill(struct vnode *vp, struct tmpfs_node *tn,
-    struct tmpfs_node *tnp, char *buf, int *buflen, struct vnode **dvp)
+    struct tmpfs_node *tnp, char *buf, size_t *buflen, struct vnode **dvp)
 {
 	struct tmpfs_dirent *de;
 	int error, i;
@@ -1519,7 +1577,7 @@ tmpfs_vptocnp_fill(struct vnode *vp, struct tmpfs_node *tn,
 	}
 	if (error == 0) {
 		if (vp != *dvp)
-			VOP_UNLOCK(*dvp, 0);
+			VOP_UNLOCK(*dvp);
 	} else {
 		if (vp != *dvp)
 			vput(*dvp);
@@ -1537,7 +1595,7 @@ tmpfs_vptocnp(struct vop_vptocnp_args *ap)
 	struct tmpfs_dirent *de;
 	struct tmpfs_mount *tm;
 	char *buf;
-	int *buflen;
+	size_t *buflen;
 	int error;
 
 	vp = ap->a_vp;
@@ -1584,7 +1642,7 @@ restart:
 				tmpfs_free_node(tm, tnp);
 				return (0);
 			}
-			if ((vp->v_iflag & VI_DOOMED) != 0) {
+			if (VN_IS_DOOMED(vp)) {
 				tmpfs_free_node(tm, tnp);
 				return (ENOENT);
 			}
@@ -1615,6 +1673,7 @@ struct vop_vector tmpfs_vnodeop_entries = {
 	.vop_mknod =			tmpfs_mknod,
 	.vop_open =			tmpfs_open,
 	.vop_close =			tmpfs_close,
+	.vop_fplookup_vexec =		tmpfs_fplookup_vexec,
 	.vop_access =			tmpfs_access,
 	.vop_getattr =			tmpfs_getattr,
 	.vop_setattr =			tmpfs_setattr,
@@ -1638,7 +1697,11 @@ struct vop_vector tmpfs_vnodeop_entries = {
 	.vop_whiteout =			tmpfs_whiteout,
 	.vop_bmap =			VOP_EOPNOTSUPP,
 	.vop_vptocnp =			tmpfs_vptocnp,
+	.vop_lock1 =			vop_lock,
+	.vop_unlock = 			vop_unlock,
+	.vop_islocked = 		vop_islocked,
 };
+VFS_VOP_VECTOR_REGISTER(tmpfs_vnodeop_entries);
 
 /*
  * Same vector for mounts which do not use namecache.
@@ -1647,3 +1710,4 @@ struct vop_vector tmpfs_vnodeop_nonc_entries = {
 	.vop_default =			&tmpfs_vnodeop_entries,
 	.vop_lookup =			tmpfs_lookup,
 };
+VFS_VOP_VECTOR_REGISTER(tmpfs_vnodeop_nonc_entries);

@@ -362,6 +362,11 @@ struct config_file {
 	int serve_expired_ttl;
 	/** reset serve expired TTL after failed update attempt */
 	int serve_expired_ttl_reset;
+	/** TTL for the serve expired replies */
+	int serve_expired_reply_ttl;
+	/** serve expired entries only after trying to update the entries and this
+	 *  timeout (in milliseconds) is reached */
+	int serve_expired_client_timeout;
 	/** nsec3 maximum iterations per key size, string */
 	char* val_nsec3_key_iterations;
 	/** autotrust add holddown time, in seconds */
@@ -384,6 +389,10 @@ struct config_file {
 	struct config_str2list* local_zones;
 	/** local zones nodefault list */
 	struct config_strlist* local_zones_nodefault;
+#ifdef USE_IPSET
+	/** local zones ipset list */
+	struct config_strlist* local_zones_ipset;
+#endif
 	/** do not add any default local zone */
 	int local_zones_disable_default;
 	/** local data RRs configured */
@@ -433,7 +442,7 @@ struct config_file {
 	char* control_cert_file;
 
 	/** Python script file */
-	char* python_script;
+	struct config_strlist* python_script;
 
 	/** Use systemd socket activation. */
 	int use_systemd;
@@ -575,6 +584,12 @@ struct config_file {
 	int redis_timeout;
 #endif
 #endif
+
+	/* ipset module */
+#ifdef USE_IPSET
+	char* ipset_name_v4;
+	char* ipset_name_v6;
+#endif
 };
 
 /** from cfg username, after daemonize setup performed */
@@ -631,6 +646,21 @@ struct config_auth {
 	/** fallback to recursion to authorities if zone expired and other
 	 * reasons perhaps (like, query bogus) */
 	int fallback_enabled;
+	/** this zone is used to create local-zone policies */
+	int isrpz;
+	/** rpz tags (or NULL) */
+	uint8_t* rpz_taglist;
+	/** length of the taglist (in bytes) */
+	size_t rpz_taglistlen;
+	/** Override RPZ action for this zone, regardless of zone content */
+	char* rpz_action_override;
+	/** Log when this RPZ policy is applied */
+	int rpz_log;
+	/** Display this name in the log when RPZ policy is applied */
+	char* rpz_log_name;
+	/** Always reply with this CNAME target if the cname override action is
+	 * used */
+	char* rpz_cname;
 };
 
 /**
@@ -647,6 +677,10 @@ struct config_view {
 	struct config_strlist* local_data;
 	/** local zones nodefault list */
 	struct config_strlist* local_zones_nodefault;
+#ifdef USE_IPSET
+	/** local zones ipset list */
+	struct config_strlist* local_zones_ipset;
+#endif
 	/** Fallback to global local_zones when there is no match in the view
 	 * view specific tree. 1 for yes, 0 for no */	
 	int isfirst;
@@ -819,6 +853,14 @@ char* config_collate_cat(struct config_strlist* list);
  * on fail the item is free()ed.
  */
 int cfg_strlist_append(struct config_strlist_head* list, char* item);
+
+/**
+ * Searches the end of a string list and appends the given text.
+ * @param head: pointer to strlist head variable.
+ * @param item: new item. malloced by caller. if NULL the insertion fails.
+ * @return true on success.
+ */
+int cfg_strlist_append_ex(struct config_strlist** head, char* item);
 
 /**
  * Find string in strlist.
@@ -1021,7 +1063,7 @@ char* config_taglist2str(struct config_file* cfg, uint8_t* taglist,
  * @param list2len: length in bytes of second list.
  * @return true if there are tags in common, 0 if not.
  */
-int taglist_intersect(uint8_t* list1, size_t list1len, uint8_t* list2,
+int taglist_intersect(uint8_t* list1, size_t list1len, const uint8_t* list2,
 	size_t list2len);
 
 /**
@@ -1181,3 +1223,4 @@ void w_config_adjust_directory(struct config_file* cfg);
 extern int fake_dsa, fake_sha1;
 
 #endif /* UTIL_CONFIG_FILE_H */
+

@@ -128,7 +128,11 @@ static struct intr_irqsrc *irq_sources[NIRQ];
 u_int irq_next_free;
 
 #ifdef SMP
-static boolean_t irq_assign_cpu = FALSE;
+#ifdef EARLY_AP_STARTUP
+static bool irq_assign_cpu = true;
+#else
+static bool irq_assign_cpu = false;
+#endif
 #endif
 
 /*
@@ -797,8 +801,8 @@ intr_pic_register(device_t dev, intptr_t xref)
 	if (pic == NULL)
 		return (NULL);
 
-	debugf("PIC %p registered for %s <dev %p, xref %x>\n", pic,
-	    device_get_nameunit(dev), dev, xref);
+	debugf("PIC %p registered for %s <dev %p, xref %jx>\n", pic,
+	    device_get_nameunit(dev), dev, (uintmax_t)xref);
 	return (pic);
 }
 
@@ -1191,6 +1195,7 @@ intr_irq_next_cpu(u_int last_cpu, cpuset_t *cpumask)
 	return (last_cpu);
 }
 
+#ifndef EARLY_AP_STARTUP
 /*
  *  Distribute all the interrupt sources among the available
  *  CPUs once the AP's have been launched.
@@ -1205,7 +1210,7 @@ intr_irq_shuffle(void *arg __unused)
 		return;
 
 	mtx_lock(&isrc_table_lock);
-	irq_assign_cpu = TRUE;
+	irq_assign_cpu = true;
 	for (i = 0; i < NIRQ; i++) {
 		isrc = irq_sources[i];
 		if (isrc == NULL || isrc->isrc_handlers == 0 ||
@@ -1231,6 +1236,7 @@ intr_irq_shuffle(void *arg __unused)
 	mtx_unlock(&isrc_table_lock);
 }
 SYSINIT(intr_irq_shuffle, SI_SUB_SMP, SI_ORDER_SECOND, intr_irq_shuffle, NULL);
+#endif /* !EARLY_AP_STARTUP */
 
 #else
 u_int
@@ -1239,7 +1245,7 @@ intr_irq_next_cpu(u_int current_cpu, cpuset_t *cpumask)
 
 	return (PCPU_GET(cpuid));
 }
-#endif
+#endif /* SMP */
 
 /*
  * Allocate memory for new intr_map_data structure.
@@ -1261,7 +1267,6 @@ void intr_free_intr_map_data(struct intr_map_data *data)
 
 	free(data, M_INTRNG);
 }
-
 
 /*
  *  Register a MSI/MSI-X interrupt controller
@@ -1376,7 +1381,6 @@ intr_alloc_msix(device_t pci, device_t child, intptr_t xref, int *irq)
 	    ("%s: Found a non-MSI controller: %s", __func__,
 	     device_get_name(pic->pic_dev)));
 
-
 	err = MSI_ALLOC_MSIX(pic->pic_dev, child, &pdev, &isrc);
 	if (err != 0)
 		return (err);
@@ -1444,7 +1448,6 @@ intr_map_msi(device_t pci, device_t child, intptr_t xref, int irq,
 	err = MSI_MAP_MSI(pic->pic_dev, child, isrc, addr, data);
 	return (err);
 }
-
 
 void dosoftints(void);
 void
@@ -1520,13 +1523,12 @@ intr_map_get_isrc(u_int res_id)
 {
 	struct intr_irqsrc *isrc;
 
+	isrc = NULL;
 	mtx_lock(&irq_map_lock);
-	if ((res_id >= irq_map_count) || (irq_map[res_id] == NULL)) {
-		mtx_unlock(&irq_map_lock);
-		return (NULL);
-	}
-	isrc = irq_map[res_id]->isrc;
+	if (res_id < irq_map_count && irq_map[res_id] != NULL)
+		isrc = irq_map[res_id]->isrc;
 	mtx_unlock(&irq_map_lock);
+
 	return (isrc);
 }
 
@@ -1535,11 +1537,8 @@ intr_map_set_isrc(u_int res_id, struct intr_irqsrc *isrc)
 {
 
 	mtx_lock(&irq_map_lock);
-	if ((res_id >= irq_map_count) || (irq_map[res_id] == NULL)) {
-		mtx_unlock(&irq_map_lock);
-		return;
-	}
-	irq_map[res_id]->isrc = isrc;
+	if (res_id < irq_map_count && irq_map[res_id] != NULL)
+		irq_map[res_id]->isrc = isrc;
 	mtx_unlock(&irq_map_lock);
 }
 
@@ -1594,7 +1593,6 @@ intr_map_copy_map_data(u_int res_id, device_t *map_dev, intptr_t *map_xref,
 	*map_xref = irq_map[res_id]->xref;
 	mtx_unlock(&irq_map_lock);
 }
-
 
 /*
  * Allocate and fill new entry in irq_map table.

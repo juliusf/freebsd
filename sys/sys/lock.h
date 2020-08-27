@@ -107,6 +107,7 @@ struct lock_class {
 #define	LOP_TRYLOCK	0x00000004	/* Don't check lock order. */
 #define	LOP_EXCLUSIVE	0x00000008	/* Exclusive lock. */
 #define	LOP_DUPOK	0x00000010	/* Don't check for duplicate acquires */
+#define	LOP_NOSLEEP	0x00000020	/* Non-sleepable despite LO_SLEEPABLE */
 
 /* Flags passed to witness_assert. */
 #define	LA_MASKASSERT	0x000000ff	/* Mask for witness defined asserts. */
@@ -161,16 +162,6 @@ struct lock_class {
 
 #define	lock_initialized(lo)	((lo)->lo_flags & LO_INITIALIZED)
 
-/*
- * Helpful macros for quickly coming up with assertions with informative
- * panic messages.
- */
-#define MPASS(ex)		MPASS4(ex, #ex, __FILE__, __LINE__)
-#define MPASS2(ex, what)	MPASS4(ex, what, __FILE__, __LINE__)
-#define MPASS3(ex, file, line)	MPASS4(ex, #ex, file, line)
-#define MPASS4(ex, what, file, line)					\
-	KASSERT((ex), ("Assertion %s failed at %s:%d", what, file, line))
-
 extern struct lock_class lock_class_mtx_sleep;
 extern struct lock_class lock_class_mtx_spin;
 extern struct lock_class lock_class_sx;
@@ -182,13 +173,17 @@ extern struct lock_class lock_class_lockmgr;
 extern struct lock_class *lock_classes[];
 
 struct lock_delay_config {
-	u_int base;
-	u_int max;
+	u_short base;
+	u_short max;
 };
+
+extern struct lock_delay_config locks_delay;
+extern u_short locks_delay_retries;
+extern u_short locks_delay_loops;
 
 struct lock_delay_arg {
 	struct lock_delay_config *config;
-	u_int delay;
+	u_short delay;
 	u_int spin_cnt;
 };
 
@@ -197,6 +192,13 @@ lock_delay_arg_init(struct lock_delay_arg *la, struct lock_delay_config *lc)
 {
 	la->config = lc;
 	la->delay = lc->base;
+	la->spin_cnt = 0;
+}
+
+static inline void
+lock_delay_arg_init_noadapt(struct lock_delay_arg *la)
+{
+	la->delay = 0;
 	la->spin_cnt = 0;
 }
 

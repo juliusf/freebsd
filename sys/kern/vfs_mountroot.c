@@ -237,27 +237,13 @@ root_mounted(void)
 static void
 set_rootvnode(void)
 {
-	struct proc *p;
 
 	if (VFS_ROOT(TAILQ_FIRST(&mountlist), LK_EXCLUSIVE, &rootvnode))
 		panic("set_rootvnode: Cannot find root vnode");
 
-	VOP_UNLOCK(rootvnode, 0);
+	VOP_UNLOCK(rootvnode);
 
-	p = curthread->td_proc;
-	FILEDESC_XLOCK(p->p_fd);
-
-	if (p->p_fd->fd_cdir != NULL)
-		vrele(p->p_fd->fd_cdir);
-	p->p_fd->fd_cdir = rootvnode;
-	VREF(rootvnode);
-
-	if (p->p_fd->fd_rdir != NULL)
-		vrele(p->p_fd->fd_rdir);
-	p->p_fd->fd_rdir = rootvnode;
-	VREF(rootvnode);
-
-	FILEDESC_XUNLOCK(p->p_fd);
+	pwd_set_rootvnode();
 }
 
 static int
@@ -384,7 +370,7 @@ vfs_mountroot_shuffle(struct thread *td, struct mount *mpdevfs)
 				vp->v_mountedhere = mporoot;
 				strlcpy(mporoot->mnt_stat.f_mntonname,
 				    fspath, MNAMELEN);
-				VOP_UNLOCK(vp, 0);
+				VOP_UNLOCK(vp);
 			} else
 				vput(vp);
 		}
@@ -412,7 +398,7 @@ vfs_mountroot_shuffle(struct thread *td, struct mount *mpdevfs)
 			}
 			mpdevfs->mnt_vnodecovered = vp;
 			vp->v_mountedhere = mpdevfs;
-			VOP_UNLOCK(vp, 0);
+			VOP_UNLOCK(vp);
 		} else
 			vput(vp);
 	}
@@ -974,7 +960,7 @@ vfs_mountroot_readconf(struct thread *td, struct sbuf *sb)
 		ofs += len - resid;
 	}
 
-	VOP_UNLOCK(nd.ni_vp, 0);
+	VOP_UNLOCK(nd.ni_vp);
 	vn_close(nd.ni_vp, FREAD, td->td_ucred, td);
 	return (error);
 }
@@ -1063,7 +1049,7 @@ vfs_mountroot(void)
 	struct thread *td;
 	time_t timebase;
 	int error;
-	
+
 	mtx_assert(&Giant, MA_NOTOWNED);
 
 	TSENTER();

@@ -4,11 +4,16 @@
 
 LIB=		egacy
 SRC=
-INCSGROUPS=	INCS SYSINCS CASPERINC
+INCSGROUPS=	INCS SYSINCS CASPERINC UFSINCS FFSINCS MSDOSFSINCS DISKINCS
 INCS=
 
 SYSINCSDIR=	${INCLUDEDIR}/sys
 CASPERINCDIR=	${INCLUDEDIR}/casper
+# Also add ufs/ffs/msdosfs/disk headers to allow building makefs as a bootstrap tool
+UFSINCSDIR=	${INCLUDEDIR}/ufs/ufs
+FFSINCSDIR=	${INCLUDEDIR}/ufs/ffs
+MSDOSFSINCSDIR=	${INCLUDEDIR}/fs/msdosfs
+DISKINCSDIR=	${INCLUDEDIR}/sys/disk
 
 BOOTSTRAPPING?=	0
 
@@ -70,9 +75,25 @@ SRCS=		dummy.c
 SUBDIR=		cross-build
 .endif
 
+# To allow bootstrapping makefs on FreeBSD 11 or non-FreeBSD systems:
+UFSINCS+=	${SRCTOP}/sys/ufs/ufs/dinode.h
+UFSINCS+=	${SRCTOP}/sys/ufs/ufs/dir.h
+FFSINCS+=	${SRCTOP}/sys/ufs/ffs/fs.h
+
+MSDOSFSINCS+=	${SRCTOP}/sys/fs/msdosfs/bootsect.h
+MSDOSFSINCS+=	${SRCTOP}/sys/fs/msdosfs/bpb.h
+MSDOSFSINCS+=	${SRCTOP}/sys/fs/msdosfs/denode.h
+MSDOSFSINCS+=	${SRCTOP}/sys/fs/msdosfs/direntry.h
+MSDOSFSINCS+=	${SRCTOP}/sys/fs/msdosfs/fat.h
+MSDOSFSINCS+=	${SRCTOP}/sys/fs/msdosfs/msdosfsmount.h
+DISKINCS+=	${SRCTOP}/sys/sys/disk/bsd.h
+
 # Needed to build config (since it uses libnv)
 SYSINCS+=	${SRCTOP}/sys/sys/nv.h ${SRCTOP}/sys/sys/cnv.h \
 		${SRCTOP}/sys/sys/dnv.h
+
+# vtfontcvt is using sys/font.h
+SYSINCS+=	${SRCTOP}/sys/sys/font.h
 
 # We want to run the build with only ${WORLDTMP} in $PATH to ensure we don't
 # accidentally run tools that are incompatible but happen to be in $PATH.
@@ -84,7 +105,7 @@ SYSINCS+=	${SRCTOP}/sys/sys/nv.h ${SRCTOP}/sys/sys/cnv.h \
 
 # basic commands: It is fine to use the host version for all of these even on
 # Linux/MacOS since we only use flags that are supported by all of them.
-_host_tools_to_symlink=	basename bzip2 bunzip2 chmod chown cmp comm cp date \
+_host_tools_to_symlink=	basename bzip2 bunzip2 chmod chown cmp comm cp date dd \
 	dirname echo env false find fmt gzip gunzip head hostname id ln ls \
 	mkdir mv nice patch rm realpath sh sleep stat tee touch tr true uname \
 	uniq wc which
@@ -116,6 +137,9 @@ host-symlinks:
 		ln -sfnv "$${source_path}" "$${target_path}"; \
 	fi
 .endfor
+.if exists(/usr/libexec/flua)
+	ln -sf /usr/libexec/flua ${DESTDIR}/usr/libexec/flua
+.endif
 
 # Create all the directories that are needed during the legacy, bootstrap-tools
 # and cross-tools stages. We do this here using mkdir since mtree may not exist
@@ -125,6 +149,7 @@ INSTALLDIR_LIST= \
 	lib/casper \
 	lib/geom \
 	usr/include/casper \
+	usr/include/private/ucl \
 	usr/include/private/zstd \
 	usr/lib \
 	usr/libexec

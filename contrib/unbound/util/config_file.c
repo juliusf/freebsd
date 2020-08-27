@@ -246,6 +246,8 @@ config_create(void)
 	cfg->serve_expired = 0;
 	cfg->serve_expired_ttl = 0;
 	cfg->serve_expired_ttl_reset = 0;
+	cfg->serve_expired_reply_ttl = 30;
+	cfg->serve_expired_client_timeout = 0;
 	cfg->add_holddown = 30*24*3600;
 	cfg->del_holddown = 30*24*3600;
 	cfg->keep_missing = 366*24*3600; /* one year plus a little leeway */
@@ -255,6 +257,9 @@ config_create(void)
 	cfg->neg_cache_size = 1 * 1024 * 1024;
 	cfg->local_zones = NULL;
 	cfg->local_zones_nodefault = NULL;
+#ifdef USE_IPSET
+	cfg->local_zones_ipset = NULL;
+#endif
 	cfg->local_zones_disable_default = 0;
 	cfg->local_data = NULL;
 	cfg->local_zone_overrides = NULL;
@@ -324,12 +329,21 @@ config_create(void)
 	cfg->ipsecmod_strict = 0;
 #endif
 #ifdef USE_CACHEDB
-	cfg->cachedb_backend = NULL;
-	cfg->cachedb_secret = NULL;
+	if(!(cfg->cachedb_backend = strdup("testframe"))) goto error_exit;
+	if(!(cfg->cachedb_secret = strdup("default"))) goto error_exit;
+#ifdef USE_REDIS
+	if(!(cfg->redis_server_host = strdup("127.0.0.1"))) goto error_exit;
+	cfg->redis_timeout = 100;
+	cfg->redis_server_port = 6379;
+#endif  /* USE_REDIS */
+#endif  /* USE_CACHEDB */
+#ifdef USE_IPSET
+	cfg->ipset_name_v4 = NULL;
+	cfg->ipset_name_v6 = NULL;
 #endif
 	return cfg;
 error_exit:
-	config_delete(cfg); 
+	config_delete(cfg);
 	return NULL;
 }
 
@@ -574,10 +588,15 @@ int config_set_option(struct config_file* cfg, const char* opt,
 	else S_YNO("val-permissive-mode:", val_permissive_mode)
 	else S_YNO("aggressive-nsec:", aggressive_nsec)
 	else S_YNO("ignore-cd-flag:", ignore_cd)
-	else S_YNO("serve-expired:", serve_expired)
-	else if(strcmp(opt, "serve_expired_ttl:") == 0)
+	else if(strcmp(opt, "serve-expired:") == 0)
+	{ IS_YES_OR_NO; cfg->serve_expired = (strcmp(val, "yes") == 0);
+	  SERVE_EXPIRED = cfg->serve_expired; }
+	else if(strcmp(opt, "serve-expired-ttl:") == 0)
 	{ IS_NUMBER_OR_ZERO; cfg->serve_expired_ttl = atoi(val); SERVE_EXPIRED_TTL=(time_t)cfg->serve_expired_ttl;}
 	else S_YNO("serve-expired-ttl-reset:", serve_expired_ttl_reset)
+	else if(strcmp(opt, "serve-expired-reply-ttl:") == 0)
+	{ IS_NUMBER_OR_ZERO; cfg->serve_expired_reply_ttl = atoi(val); SERVE_EXPIRED_REPLY_TTL=(time_t)cfg->serve_expired_reply_ttl;}
+	else S_NUMBER_OR_ZERO("serve-expired-client-timeout:", serve_expired_client_timeout)
 	else S_STR("val-nsec3-keysize-iterations:", val_nsec3_key_iterations)
 	else S_UNSIGNED_OR_ZERO("add-holddown:", add_holddown)
 	else S_UNSIGNED_OR_ZERO("del-holddown:", del_holddown)
@@ -602,7 +621,7 @@ int config_set_option(struct config_file* cfg, const char* opt,
 	else S_STR("control-key-file:", control_key_file)
 	else S_STR("control-cert-file:", control_cert_file)
 	else S_STR("module-config:", module_conf)
-	else S_STR("python-script:", python_script)
+	else S_STRLIST("python-script:", python_script)
 	else S_YNO("disable-dnssec-lame-check:", disable_dnssec_lame_check)
 #ifdef CLIENT_SUBNET
 	/* Can't set max subnet prefix here, since that value is used when
@@ -970,6 +989,8 @@ config_get_option(struct config_file* cfg, const char* opt,
 	else O_YNO(opt, "serve-expired", serve_expired)
 	else O_DEC(opt, "serve-expired-ttl", serve_expired_ttl)
 	else O_YNO(opt, "serve-expired-ttl-reset", serve_expired_ttl_reset)
+	else O_DEC(opt, "serve-expired-reply-ttl", serve_expired_reply_ttl)
+	else O_DEC(opt, "serve-expired-client-timeout", serve_expired_client_timeout)
 	else O_STR(opt, "val-nsec3-keysize-iterations",val_nsec3_key_iterations)
 	else O_UNS(opt, "add-holddown", add_holddown)
 	else O_UNS(opt, "del-holddown", del_holddown)
@@ -1054,7 +1075,7 @@ config_get_option(struct config_file* cfg, const char* opt,
 	else O_YNO(opt, "unblock-lan-zones", unblock_lan_zones)
 	else O_YNO(opt, "insecure-lan-zones", insecure_lan_zones)
 	else O_DEC(opt, "max-udp-size", max_udp_size)
-	else O_STR(opt, "python-script", python_script)
+	else O_LST(opt, "python-script", python_script)
 	else O_YNO(opt, "disable-dnssec-lame-check", disable_dnssec_lame_check)
 	else O_DEC(opt, "ip-ratelimit", ip_ratelimit)
 	else O_DEC(opt, "ratelimit", ratelimit)
@@ -1091,6 +1112,15 @@ config_get_option(struct config_file* cfg, const char* opt,
 #ifdef USE_CACHEDB
 	else O_STR(opt, "backend", cachedb_backend)
 	else O_STR(opt, "secret-seed", cachedb_secret)
+#ifdef USE_REDIS
+	else O_STR(opt, "redis-server-host", redis_server_host)
+	else O_DEC(opt, "redis-server-port", redis_server_port)
+	else O_DEC(opt, "redis-timeout", redis_timeout)
+#endif  /* USE_REDIS */
+#endif  /* USE_CACHEDB */
+#ifdef USE_IPSET
+	else O_STR(opt, "name-v4", ipset_name_v4)
+	else O_STR(opt, "name-v6", ipset_name_v6)
 #endif
 	/* not here:
 	 * outgoing-permit, outgoing-avoid - have list of ports
@@ -1268,6 +1298,10 @@ config_delauth(struct config_auth* p)
 	config_delstrlist(p->urls);
 	config_delstrlist(p->allow_notify);
 	free(p->zonefile);
+	free(p->rpz_taglist);
+	free(p->rpz_action_override);
+	free(p->rpz_cname);
+	free(p->rpz_log_name);
 	free(p);
 }
 
@@ -1310,6 +1344,9 @@ config_delview(struct config_view* p)
 	free(p->name);
 	config_deldblstrlist(p->local_zones);
 	config_delstrlist(p->local_zones_nodefault);
+#ifdef USE_IPSET
+	config_delstrlist(p->local_zones_ipset);
+#endif
 	config_delstrlist(p->local_data);
 	free(p);
 }
@@ -1367,7 +1404,10 @@ config_delete(struct config_file* cfg)
 	config_delstrlist(cfg->tls_session_ticket_keys.first);
 	free(cfg->tls_ciphers);
 	free(cfg->tls_ciphersuites);
-	free(cfg->log_identity);
+	if(cfg->log_identity) {
+		log_ident_revert_to_default();
+		free(cfg->log_identity);
+	}
 	config_del_strarray(cfg->ifs, cfg->num_ifs);
 	config_del_strarray(cfg->out_ifs, cfg->num_out_ifs);
 	config_delstubs(cfg->stubs);
@@ -1384,7 +1424,6 @@ config_delete(struct config_file* cfg)
 	free(cfg->version);
 	free(cfg->module_conf);
 	free(cfg->outgoing_avail_ports);
-	free(cfg->python_script);
 	config_delstrlist(cfg->caps_whitelist);
 	config_delstrlist(cfg->private_address);
 	config_delstrlist(cfg->private_domain);
@@ -1400,6 +1439,9 @@ config_delete(struct config_file* cfg)
 	free(cfg->val_nsec3_key_iterations);
 	config_deldblstrlist(cfg->local_zones);
 	config_delstrlist(cfg->local_zones_nodefault);
+#ifdef USE_IPSET
+	config_delstrlist(cfg->local_zones_ipset);
+#endif
 	config_delstrlist(cfg->local_data);
 	config_deltrplstrlist(cfg->local_zone_overrides);
 	config_del_strarray(cfg->tagname, cfg->num_tags);
@@ -1420,6 +1462,7 @@ config_delete(struct config_file* cfg)
 	free(cfg->dnstap_version);
 	config_deldblstrlist(cfg->ratelimit_for_domain);
 	config_deldblstrlist(cfg->ratelimit_below_domain);
+	config_delstrlist(cfg->python_script);
 #ifdef USE_IPSECMOD
 	free(cfg->ipsecmod_hook);
 	config_delstrlist(cfg->ipsecmod_whitelist);
@@ -1427,6 +1470,13 @@ config_delete(struct config_file* cfg)
 #ifdef USE_CACHEDB
 	free(cfg->cachedb_backend);
 	free(cfg->cachedb_secret);
+#ifdef USE_REDIS
+	free(cfg->redis_server_host);
+#endif  /* USE_REDIS */
+#endif  /* USE_CACHEDB */
+#ifdef USE_IPSET
+	free(cfg->ipset_name_v4);
+	free(cfg->ipset_name_v6);
 #endif
 	free(cfg);
 }
@@ -1628,6 +1678,31 @@ cfg_strlist_insert(struct config_strlist** head, char* item)
 	s->next = *head;
 	*head = s;
 	return 1;
+}
+
+int
+cfg_strlist_append_ex(struct config_strlist** head, char* item)
+{
+	struct config_strlist *s;
+	if(!item || !head)
+		return 0;
+	s = (struct config_strlist*)calloc(1, sizeof(struct config_strlist));
+	if(!s)
+		return 0;
+	s->str = item;
+	s->next = NULL;
+	
+	if (*head==NULL) {
+		*head = s;
+	} else {
+		struct config_strlist *last = *head;
+		while (last->next!=NULL) {
+		    last = last->next;
+		}
+		last->next = s;
+	}
+	
+	return 1;  
 }
 
 int 
@@ -1896,7 +1971,7 @@ char* config_taglist2str(struct config_file* cfg, uint8_t* taglist,
 	return strdup(buf);
 }
 
-int taglist_intersect(uint8_t* list1, size_t list1len, uint8_t* list2,
+int taglist_intersect(uint8_t* list1, size_t list1len, const uint8_t* list2,
 	size_t list2len)
 {
 	size_t i;
@@ -1914,7 +1989,9 @@ config_apply(struct config_file* config)
 {
 	MAX_TTL = (time_t)config->max_ttl;
 	MIN_TTL = (time_t)config->min_ttl;
+	SERVE_EXPIRED = config->serve_expired;
 	SERVE_EXPIRED_TTL = (time_t)config->serve_expired_ttl;
+	SERVE_EXPIRED_REPLY_TTL = (time_t)config->serve_expired_reply_ttl;
 	MAX_NEG_TTL = (time_t)config->max_negative_ttl;
 	RTT_MIN_TIMEOUT = config->infra_cache_min_rtt;
 	EDNS_ADVERTISED_SIZE = (uint16_t)config->edns_buffer_size;
@@ -2107,6 +2184,11 @@ cfg_parse_local_zone(struct config_file* cfg, const char* val)
 	if(strcmp(type, "nodefault")==0) {
 		return cfg_strlist_insert(&cfg->local_zones_nodefault, 
 			strdup(name));
+#ifdef USE_IPSET
+	} else if(strcmp(type, "ipset")==0) {
+		return cfg_strlist_insert(&cfg->local_zones_ipset, 
+			strdup(name));
+#endif
 	} else {
 		return cfg_str2list_insert(&cfg->local_zones, strdup(buf),
 			strdup(type));
@@ -2381,3 +2463,4 @@ int options_remote_is_address(struct config_file* cfg)
 	if(cfg->control_ifs.first->str[0] == 0) return 1;
 	return (cfg->control_ifs.first->str[0] != '/');
 }
+

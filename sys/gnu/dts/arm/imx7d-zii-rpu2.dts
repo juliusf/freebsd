@@ -182,7 +182,7 @@
 };
 
 &cpu0 {
-	arm-supply = <&sw1a_reg>;
+	cpu-supply = <&sw1a_reg>;
 };
 
 &clks {
@@ -666,10 +666,6 @@
 };
 
 &snvs_rtc {
-	status = "disabled";
-};
-
-&snvs_pwrkey {
 	status = "disabled";
 };
 

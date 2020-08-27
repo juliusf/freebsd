@@ -111,6 +111,8 @@
 /* Forwards needed by prototypes below. */
 union ccb;
 struct bio;
+struct crypto_buffer;
+struct cryptop;
 struct mbuf;
 struct memdesc;
 struct pmap;
@@ -179,6 +181,24 @@ int bus_dma_tag_create(bus_dma_tag_t parent, bus_size_t alignment,
 		       bus_size_t maxsegsz, int flags, bus_dma_lock_t *lockfunc,
 		       void *lockfuncarg, bus_dma_tag_t *dmat);
 
+/* Functions for creating and cloning tags via a template */
+typedef struct {
+	bus_dma_tag_t		parent;
+	bus_size_t		alignment;
+	bus_addr_t		boundary;
+	bus_addr_t		lowaddr;
+	bus_addr_t		highaddr;
+	bus_size_t		maxsize;
+	int			nsegments;
+	bus_size_t		maxsegsize;
+	int			flags;
+	bus_dma_lock_t		*lockfunc;
+	void			*lockfuncarg;
+} bus_dma_tag_template_t;
+void bus_dma_template_init(bus_dma_tag_template_t *t, bus_dma_tag_t parent);
+int bus_dma_template_tag(bus_dma_tag_template_t *t, bus_dma_tag_t *dmat);
+void bus_dma_template_clone(bus_dma_tag_template_t *t, bus_dma_tag_t dmat);
+
 /*
  * Set the memory domain to be used for allocations.
  *
@@ -244,6 +264,17 @@ int bus_dmamap_load_ccb(bus_dma_tag_t dmat, bus_dmamap_t map, union ccb *ccb,
 int bus_dmamap_load_bio(bus_dma_tag_t dmat, bus_dmamap_t map, struct bio *bio,
 			bus_dmamap_callback_t *callback, void *callback_arg,
 			int flags);
+
+/*
+ * Like bus_dmamap_load but for crypto ops.
+ */
+int bus_dmamap_load_crp(bus_dma_tag_t dmat, bus_dmamap_t map,
+			struct cryptop *crp, bus_dmamap_callback_t *callback,
+			void *callback_arg, int flags);
+int bus_dmamap_load_crp_buffer(bus_dma_tag_t dmat, bus_dmamap_t map,
+			       struct crypto_buffer *cb,
+			       bus_dmamap_callback_t *callback,
+			       void *callback_arg, int flags);
 
 /*
  * Loads any memory descriptor.

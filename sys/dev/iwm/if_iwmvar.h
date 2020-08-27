@@ -312,8 +312,8 @@ struct iwm_rx_ring {
 
 #define IWM_CMD_RESP_MAX PAGE_SIZE
 
-#define IWM_MVM_TE_SESSION_PROTECTION_MAX_TIME_MS 500
-#define IWM_MVM_TE_SESSION_PROTECTION_MIN_TIME_MS 400
+#define IWM_TE_SESSION_PROTECTION_MAX_TIME_MS 500
+#define IWM_TE_SESSION_PROTECTION_MIN_TIME_MS 400
 
 /*
  * Command headers are in iwl-trans.h, which is full of all
@@ -336,7 +336,7 @@ struct iwm_int_sta {
 	uint32_t tfd_queue_msk;
 };
 
-struct iwm_mvm_phy_ctxt {
+struct iwm_phy_ctxt {
 	uint16_t id;
 	uint16_t color;
 	uint32_t ref;
@@ -358,7 +358,7 @@ struct iwm_vap {
 	int			(*iv_newstate)(struct ieee80211vap *,
 				    enum ieee80211_state, int);
 
-	struct iwm_mvm_phy_ctxt	*phy_ctxt;
+	struct iwm_phy_ctxt	*phy_ctxt;
 
 	uint16_t		id;
 	uint16_t		color;
@@ -443,7 +443,7 @@ struct iwm_softc {
 	uint32_t		scd_base_addr;
 
 	/* TX/RX rings. */
-	struct iwm_tx_ring	txq[IWM_MVM_MAX_QUEUES];
+	struct iwm_tx_ring	txq[IWM_MAX_QUEUES];
 	struct iwm_rx_ring	rxq;
 	int			qfullmsk;
 
@@ -499,7 +499,9 @@ struct iwm_softc {
 	uint8_t			sc_cmd_resp[IWM_CMD_RESP_MAX];
 	int			sc_wantresp;
 
+	struct taskqueue	*sc_tq;
 	struct task		sc_es_task;
+	struct task		sc_rftoggle_task;
 
 	struct iwm_rx_phy_info	sc_last_phy_info;
 	int			sc_ampdu_ref;
@@ -507,7 +509,7 @@ struct iwm_softc {
 	struct iwm_int_sta	sc_aux_sta;
 
 	/* phy contexts.  we only use the first one */
-	struct iwm_mvm_phy_ctxt	sc_phyctxt[IWM_NUM_PHY_CTX];
+	struct iwm_phy_ctxt	sc_phyctxt[IWM_NUM_PHY_CTX];
 
 	struct iwm_notif_statistics_v10 sc_stats;
 	int			sc_noise;

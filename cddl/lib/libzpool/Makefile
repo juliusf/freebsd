@@ -18,9 +18,7 @@
 .if exists(${SRCTOP}/sys/cddl/contrib/opensolaris/common/atomic/${MACHINE_ARCH}/opensolaris_atomic.S)
 .PATH: ${SRCTOP}/sys/cddl/contrib/opensolaris/common/atomic/${MACHINE_ARCH}
 ATOMIC_SRCS=	opensolaris_atomic.S
-.if ${MACHINE_ARCH} != "sparc64"
 ACFLAGS+=	-Wa,--noexecstack
-.endif
 .else
 .PATH: ${SRCTOP}/sys/cddl/compat/opensolaris/kern
 ATOMIC_SRCS=	opensolaris_atomic.c
@@ -66,8 +64,7 @@ CFLAGS+=	-DWANTS_MUTEX_OWNED
 CFLAGS+=	-I${SRCTOP}/lib/libpthread/thread
 CFLAGS+=	-I${SRCTOP}/lib/libpthread/sys
 CFLAGS+=	-I${SRCTOP}/lib/libthr/arch/${MACHINE_CPUARCH}/include
-CFLAGS.lz4.o+=	-D_FAKE_KERNEL
-CFLAGS.lz4.pico+= -D_FAKE_KERNEL
+CFLAGS.lz4.c+=	-D_FAKE_KERNEL
 CFLAGS.gcc+=	-fms-extensions
 
 LIBADD=		md pthread z nvpair avl umem

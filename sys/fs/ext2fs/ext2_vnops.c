@@ -182,6 +182,7 @@ struct vop_vector ext2_vnodeops = {
 #endif /* UFS_ACL */
 	.vop_vptofh =		ext2_vptofh,
 };
+VFS_VOP_VECTOR_REGISTER(ext2_vnodeops);
 
 struct vop_vector ext2_fifoops = {
 	.vop_default =		&fifo_specops,
@@ -199,6 +200,7 @@ struct vop_vector ext2_fifoops = {
 	.vop_write =		VOP_PANIC,
 	.vop_vptofh =		ext2_vptofh,
 };
+VFS_VOP_VECTOR_REGISTER(ext2_fifoops);
 
 /*
  * A virgin directory (no blushing please).
@@ -207,12 +209,12 @@ struct vop_vector ext2_fifoops = {
  * endianness problems.
  */
 static struct dirtemplate mastertemplate = {
-	0, 12, 1, EXT2_FT_DIR, ".",
-	0, DIRBLKSIZ - 12, 2, EXT2_FT_DIR, ".."
+	0, htole16(12), 1, EXT2_FT_DIR, ".",
+	0, htole16(DIRBLKSIZ - 12), 2, EXT2_FT_DIR, ".."
 };
 static struct dirtemplate omastertemplate = {
-	0, 12, 1, EXT2_FT_UNKNOWN, ".",
-	0, DIRBLKSIZ - 12, 2, EXT2_FT_UNKNOWN, ".."
+	0, htole16(12), 1, EXT2_FT_UNKNOWN, ".",
+	0, htole16(DIRBLKSIZ - 12), 2, EXT2_FT_UNKNOWN, ".."
 };
 
 static void
@@ -346,7 +348,7 @@ ext2_access(struct vop_access_args *ap)
 		return (EPERM);
 
 	error = vaccess(vp->v_type, ip->i_mode, ip->i_uid, ip->i_gid,
-	    ap->a_accmode, ap->a_cred, NULL);
+	    ap->a_accmode, ap->a_cred);
 	return (error);
 }
 
@@ -835,13 +837,13 @@ abortit:
 	ip = VTOI(fvp);
 	if (ip->i_nlink >= EXT4_LINK_MAX &&
 	    !EXT2_HAS_RO_COMPAT_FEATURE(ip->i_e2fs, EXT2F_ROCOMPAT_DIR_NLINK)) {
-		VOP_UNLOCK(fvp, 0);
+		VOP_UNLOCK(fvp);
 		error = EMLINK;
 		goto abortit;
 	}
 	if ((ip->i_flags & (NOUNLINK | IMMUTABLE | APPEND))
 	    || (dp->i_flags & APPEND)) {
-		VOP_UNLOCK(fvp, 0);
+		VOP_UNLOCK(fvp);
 		error = EPERM;
 		goto abortit;
 	}
@@ -852,7 +854,7 @@ abortit:
 		if ((fcnp->cn_namelen == 1 && fcnp->cn_nameptr[0] == '.') ||
 		    dp == ip || (fcnp->cn_flags | tcnp->cn_flags) & ISDOTDOT ||
 		    (ip->i_flag & IN_RENAME)) {
-			VOP_UNLOCK(fvp, 0);
+			VOP_UNLOCK(fvp);
 			error = EINVAL;
 			goto abortit;
 		}
@@ -880,7 +882,7 @@ abortit:
 	ext2_inc_nlink(ip);
 	ip->i_flag |= IN_CHANGE;
 	if ((error = ext2_update(fvp, !DOINGASYNC(fvp))) != 0) {
-		VOP_UNLOCK(fvp, 0);
+		VOP_UNLOCK(fvp);
 		goto bad;
 	}
 
@@ -895,7 +897,7 @@ abortit:
 	 * call to checkpath().
 	 */
 	error = VOP_ACCESS(fvp, VWRITE, tcnp->cn_cred, tcnp->cn_thread);
-	VOP_UNLOCK(fvp, 0);
+	VOP_UNLOCK(fvp);
 	if (oldparent != dp->i_number)
 		newparent = dp->i_number;
 	if (doingdirectory && newparent) {
@@ -1016,10 +1018,11 @@ abortit:
 		 */
 		ext2_dec_nlink(xp);
 		if (doingdirectory) {
-			if (--xp->i_nlink != 0)
+			if (xp->i_nlink > 2)
 				panic("ext2_rename: linked directory");
 			error = ext2_truncate(tvp, (off_t)0, IO_SYNC,
 			    tcnp->cn_cred, tcnp->cn_thread);
+			xp->i_nlink = 0;
 		}
 		xp->i_flag |= IN_CHANGE;
 		vput(tvp);
@@ -1074,10 +1077,6 @@ abortit:
 			ext2_dec_nlink(dp);
 			dp->i_flag |= IN_CHANGE;
 			dirbuf = malloc(dp->i_e2fs->e2fs_bsize, M_TEMP, M_WAITOK | M_ZERO);
-			if (!dirbuf) {
-				error = ENOMEM;
-				goto bad;
-			}
 			error = vn_rdwr(UIO_READ, fvp, (caddr_t)dirbuf,
 			    ip->i_e2fs->e2fs_bsize, (off_t)0,
 			    UIO_SYSSPACE, IO_NODELOCKED | IO_NOMACCHECK,
@@ -1091,7 +1090,7 @@ abortit:
 					ext2_dirbad(xp, (doff_t)12,
 					    "rename: mangled dir");
 				} else {
-					dirbuf->dotdot_ino = newparent;
+					dirbuf->dotdot_ino = htole32(newparent);
 					/*
 					 * dirblock 0 could be htree root,
 					 * try both csum update functions.
@@ -1377,24 +1376,20 @@ ext2_mkdir(struct vop_mkdir_args *ap)
 	else
 		dtp = &omastertemplate;
 	dirtemplate = *dtp;
-	dirtemplate.dot_ino = ip->i_number;
-	dirtemplate.dotdot_ino = dp->i_number;
+	dirtemplate.dot_ino = htole32(ip->i_number);
+	dirtemplate.dotdot_ino = htole32(dp->i_number);
 	/*
 	 * note that in ext2 DIRBLKSIZ == blocksize, not DEV_BSIZE so let's
 	 * just redefine it - for this function only
 	 */
 #undef  DIRBLKSIZ
 #define DIRBLKSIZ  VTOI(dvp)->i_e2fs->e2fs_bsize
-	dirtemplate.dotdot_reclen = DIRBLKSIZ - 12;
+	dirtemplate.dotdot_reclen = htole16(DIRBLKSIZ - 12);
 	buf = malloc(DIRBLKSIZ, M_TEMP, M_WAITOK | M_ZERO);
-	if (!buf) {
-		error = ENOMEM;
-		ext2_dec_nlink(dp);
-		dp->i_flag |= IN_CHANGE;
-		goto bad;
-	}
 	if (EXT2_HAS_RO_COMPAT_FEATURE(fs, EXT2F_ROCOMPAT_METADATA_CKSUM)) {
-		dirtemplate.dotdot_reclen -= sizeof(struct ext2fs_direct_tail);
+		dirtemplate.dotdot_reclen =
+		    htole16(le16toh(dirtemplate.dotdot_reclen) -
+		    sizeof(struct ext2fs_direct_tail));
 		ext2_init_dirent_tail(EXT2_DIRENT_TAIL(buf, DIRBLKSIZ));
 	}
 	memcpy(buf, &dirtemplate, sizeof(dirtemplate));
@@ -1492,7 +1487,7 @@ ext2_rmdir(struct vop_rmdir_args *ap)
 	ext2_dec_nlink(dp);
 	dp->i_flag |= IN_CHANGE;
 	cache_purge(dvp);
-	VOP_UNLOCK(dvp, 0);
+	VOP_UNLOCK(dvp);
 	/*
 	 * Truncate inode.  The only stuff left
 	 * in the directory is "." and "..".
@@ -1502,7 +1497,7 @@ ext2_rmdir(struct vop_rmdir_args *ap)
 	    cnp->cn_thread);
 	cache_purge(ITOV(ip));
 	if (vn_lock(dvp, LK_EXCLUSIVE | LK_NOWAIT) != 0) {
-		VOP_UNLOCK(vp, 0);
+		VOP_UNLOCK(vp);
 		vn_lock(dvp, LK_EXCLUSIVE | LK_RETRY);
 		vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
 	}
@@ -2155,11 +2150,24 @@ ext2_read(struct vop_read_args *ap)
 static int
 ext2_ioctl(struct vop_ioctl_args *ap)
 {
+	struct vnode *vp;
+	int error;
 
+	vp = ap->a_vp;
 	switch (ap->a_command) {
 	case FIOSEEKDATA:
+		if (!(VTOI(vp)->i_flag & IN_E4EXTENTS)) {
+			error = vn_lock(vp, LK_SHARED);
+			if (error == 0) {
+				error = ext2_bmap_seekdata(vp,
+				    (off_t *)ap->a_data);
+				VOP_UNLOCK(vp);
+			} else
+				error = EBADF;
+			return (error);
+		}
 	case FIOSEEKHOLE:
-		return (vn_bmap_seekhole(ap->a_vp, ap->a_command,
+		return (vn_bmap_seekhole(vp, ap->a_command,
 		    (off_t *)ap->a_data, ap->a_cred));
 	default:
 		return (ENOTTY);

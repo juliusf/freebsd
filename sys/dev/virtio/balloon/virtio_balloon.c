@@ -153,6 +153,8 @@ static driver_t vtballoon_driver = {
 };
 static devclass_t vtballoon_devclass;
 
+DRIVER_MODULE(virtio_balloon, virtio_mmio, vtballoon_driver,
+    vtballoon_devclass, 0, 0);
 DRIVER_MODULE(virtio_balloon, virtio_pci, vtballoon_driver,
     vtballoon_devclass, 0, 0);
 MODULE_VERSION(virtio_balloon, 1);
@@ -160,6 +162,7 @@ MODULE_DEPEND(virtio_balloon, virtio, 1, 1, 1);
 
 VIRTIO_SIMPLE_PNPTABLE(virtio_balloon, VIRTIO_ID_BALLOON,
     "VirtIO Balloon Adapter");
+VIRTIO_SIMPLE_PNPINFO(virtio_mmio, virtio_balloon);
 VIRTIO_SIMPLE_PNPINFO(virtio_pci, virtio_balloon);
 
 static int
@@ -332,7 +335,7 @@ vtballoon_inflate(struct vtballoon_softc *sc, int npages)
 		sc->vtballoon_page_frames[i] =
 		    VM_PAGE_TO_PHYS(m) >> VIRTIO_BALLOON_PFN_SHIFT;
 
-		KASSERT(m->queue == PQ_NONE,
+		KASSERT(m->a.queue == PQ_NONE,
 		    ("%s: allocated page %p on queue", __func__, m));
 		TAILQ_INSERT_TAIL(&sc->vtballoon_pages, m, plinks.q);
 	}

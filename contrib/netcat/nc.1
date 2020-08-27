@@ -27,7 +27,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd September 26, 2015
+.Dd July 10, 2020
 .Dt NC 1
 .Os
 .Sh NAME
@@ -36,11 +36,12 @@
 .Sh SYNOPSIS
 .Nm nc
 .Bk -words
-.Op Fl 46DdEFhklNnrStUuvz
+.Op Fl 46DdEFhklMNnrStUuvz
 .Op Fl e Ar IPsec_policy
 .Op Fl I Ar length
 .Op Fl i Ar interval
 .Op Fl -no-tcpopt
+.Op Fl -sctp
 .Op Fl O Ar length
 .Op Fl P Ar proxy_username
 .Op Fl p Ar source_port
@@ -170,6 +171,12 @@ options.
 Additionally, any timeouts specified with the
 .Fl w
 option are ignored.
+.It Fl M
+Collect per-connection TCP statistics using the
+.Xr stats 3
+framework and print them in JSON format to
+.Xr stderr 4
+after the connection is closed.
 .It Fl N
 .Xr shutdown 2
 the network socket after EOF on the input.
@@ -181,6 +188,8 @@ hostnames or ports.
 Disables the use of TCP options on the socket, by setting the boolean
 TCP_NOOPT
 socket option.
+.It Fl -sctp
+Use SCTP instead of the default option of TCP.
 .It Fl O Ar length
 Specifies the size of the TCP send buffer.
 .It Fl P Ar proxy_username

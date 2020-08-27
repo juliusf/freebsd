@@ -478,7 +478,7 @@ main(int argc, char *const *argv)
 			break;
 		case 's':		/* size of packet to send */
 			ltmp = strtol(optarg, &ep, 0);
-			if (*ep || ep == optarg || ltmp < 0)
+			if (*ep || ep == optarg || ltmp > INT_MAX || ltmp < 0)
 				errx(EX_USAGE, "invalid packet size: `%s'",
 				    optarg);
 			if (uid != 0 && ltmp > DEFDATALEN) {
@@ -505,7 +505,15 @@ main(int argc, char *const *argv)
 			if (alarmtimeout > MAXALARM)
 				errx(EX_USAGE, "invalid timeout: `%s' > %d",
 				    optarg, MAXALARM);
-			alarm((int)alarmtimeout);
+			{
+				struct itimerval itv;
+
+				timerclear(&itv.it_interval);
+				timerclear(&itv.it_value);
+				itv.it_value.tv_sec = (time_t)alarmtimeout;
+				if (setitimer(ITIMER_REAL, &itv, NULL) != 0)
+					err(1, "setitimer");
+			}
 			break;
 		case 'v':
 			options |= F_VERBOSE;

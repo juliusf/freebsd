@@ -106,7 +106,7 @@ SYSCTL_INT(_vm, OID_AUTO, mincore_mapped, CTLFLAG_RWTUN, &mincore_mapped, 0,
     "mincore reports mappings, not residency");
 static int imply_prot_max = 0;
 SYSCTL_INT(_vm, OID_AUTO, imply_prot_max, CTLFLAG_RWTUN, &imply_prot_max, 0,
-    "Imply maximum page permissions in mmap() when none are specified");
+    "Imply maximum page protections in mmap() when none are specified");
 
 #ifdef MAP_32BIT
 #define	MAP_32BIT_MAX_ADDR	((vm_offset_t)1 << 31)
@@ -199,21 +199,46 @@ int
 kern_mmap(struct thread *td, uintptr_t addr0, size_t len, int prot, int flags,
     int fd, off_t pos)
 {
+	struct mmap_req mr = {
+		.mr_hint = addr0,
+		.mr_len = len,
+		.mr_prot = prot,
+		.mr_flags = flags,
+		.mr_fd = fd,
+		.mr_pos = pos
+	};
+
+	return (kern_mmap_req(td, &mr));
+}
+
+int
+kern_mmap_req(struct thread *td, const struct mmap_req *mrp)
+{
 	struct vmspace *vms;
 	struct file *fp;
 	struct proc *p;
+	off_t pos;
 	vm_offset_t addr;
-	vm_size_t pageoff, size;
+	vm_size_t len, pageoff, size;
 	vm_prot_t cap_maxprot;
-	int align, error, max_prot;
+	int align, error, fd, flags, max_prot, prot;
 	cap_rights_t rights;
+	mmap_check_fp_fn check_fp_fn;
+
+	addr  = mrp->mr_hint;
+	len = mrp->mr_len;
+	prot = mrp->mr_prot;
+	flags = mrp->mr_flags;
+	fd = mrp->mr_fd;
+	pos = mrp->mr_pos;
+	check_fp_fn = mrp->mr_check_fp_fn;
 
 	if ((prot & ~(_PROT_ALL | PROT_MAX(_PROT_ALL))) != 0)
 		return (EINVAL);
 	max_prot = PROT_MAX_EXTRACT(prot);
 	prot = PROT_EXTRACT(prot);
 	if (max_prot != 0 && (max_prot & prot) != prot)
-		return (EINVAL);
+		return (ENOTSUP);
 
 	p = td->td_proc;
 
@@ -227,7 +252,6 @@ kern_mmap(struct thread *td, uintptr_t addr0, size_t len, int prot, int flags,
 	vms = p->p_vmspace;
 	fp = NULL;
 	AUDIT_ARG_FD(fd);
-	addr = addr0;
 
 	/*
 	 * Ignore old flags that used to be defined but did not do anything.
@@ -318,10 +342,7 @@ kern_mmap(struct thread *td, uintptr_t addr0, size_t len, int prot, int flags,
 			return (EINVAL);
 
 		/* Address range must be all in user VM space. */
-		if (addr < vm_map_min(&vms->vm_map) ||
-		    addr + size > vm_map_max(&vms->vm_map))
-			return (EINVAL);
-		if (addr + size < addr)
+		if (!vm_map_range_valid(&vms->vm_map, addr, addr + size))
 			return (EINVAL);
 #ifdef MAP_32BIT
 		if (flags & MAP_32BIT && addr + size > MAP_32BIT_MAX_ADDR)
@@ -377,15 +398,15 @@ kern_mmap(struct thread *td, uintptr_t addr0, size_t len, int prot, int flags,
 		 * rights, but also return the maximum rights to be combined
 		 * with maxprot later.
 		 */
-		cap_rights_init(&rights, CAP_MMAP);
+		cap_rights_init_one(&rights, CAP_MMAP);
 		if (prot & PROT_READ)
-			cap_rights_set(&rights, CAP_MMAP_R);
+			cap_rights_set_one(&rights, CAP_MMAP_R);
 		if ((flags & MAP_SHARED) != 0) {
 			if (prot & PROT_WRITE)
-				cap_rights_set(&rights, CAP_MMAP_W);
+				cap_rights_set_one(&rights, CAP_MMAP_W);
 		}
 		if (prot & PROT_EXEC)
-			cap_rights_set(&rights, CAP_MMAP_X);
+			cap_rights_set_one(&rights, CAP_MMAP_X);
 		error = fget_mmap(td, fd, &rights, &cap_maxprot, &fp);
 		if (error != 0)
 			goto done;
@@ -394,7 +415,12 @@ kern_mmap(struct thread *td, uintptr_t addr0, size_t len, int prot, int flags,
 			error = EINVAL;
 			goto done;
 		}
-
+		if (check_fp_fn != NULL) {
+			error = check_fp_fn(fp, prot, max_prot & cap_maxprot,
+			    flags);
+			if (error != 0)
+				goto done;
+		}
 		/* This relies on VM_PROT_* matching PROT_*. */
 		error = fo_mmap(fp, &vms->vm_map, &addr, size, prot,
 		    max_prot & cap_maxprot, flags, pos, td);
@@ -548,7 +574,7 @@ kern_munmap(struct thread *td, uintptr_t addr0, size_t size)
 	vm_map_entry_t entry;
 	bool pmc_handled;
 #endif
-	vm_offset_t addr;
+	vm_offset_t addr, end;
 	vm_size_t pageoff;
 	vm_map_t map;
 
@@ -560,15 +586,11 @@ kern_munmap(struct thread *td, uintptr_t addr0, size_t size)
 	addr -= pageoff;
 	size += pageoff;
 	size = (vm_size_t) round_page(size);
-	if (addr + size < addr)
+	end = addr + size;
+	map = &td->td_proc->p_vmspace->vm_map;
+	if (!vm_map_range_valid(map, addr, end))
 		return (EINVAL);
 
-	/*
-	 * Check for illegal addresses.  Watch out for address wrap...
-	 */
-	map = &td->td_proc->p_vmspace->vm_map;
-	if (addr < vm_map_min(map) || addr + size > vm_map_max(map))
-		return (EINVAL);
 	vm_map_lock(map);
 #ifdef HWPMC_HOOKS
 	pmc_handled = false;
@@ -580,7 +602,7 @@ kern_munmap(struct thread *td, uintptr_t addr0, size_t size)
 		 */
 		pkm.pm_address = (uintptr_t) NULL;
 		if (vm_map_lookup_entry(map, addr, &entry)) {
-			for (; entry->start < addr + size;
+			for (; entry->start < end;
 			    entry = vm_map_entry_succ(entry)) {
 				if (vm_map_check_protection(map, entry->start,
 					entry->end, VM_PROT_EXECUTE) == TRUE) {
@@ -592,7 +614,7 @@ kern_munmap(struct thread *td, uintptr_t addr0, size_t size)
 		}
 	}
 #endif
-	vm_map_delete(map, addr, addr + size);
+	vm_map_delete(map, addr, end);
 
 #ifdef HWPMC_HOOKS
 	if (__predict_false(pmc_handled)) {
@@ -651,7 +673,7 @@ kern_mprotect(struct thread *td, uintptr_t addr0, size_t size, int prot)
 	vm_error = KERN_SUCCESS;
 	if (max_prot != 0) {
 		if ((max_prot & prot) != prot)
-			return (EINVAL);
+			return (ENOTSUP);
 		vm_error = vm_map_protect(&td->td_proc->p_vmspace->vm_map,
 		    addr, addr + size, max_prot, TRUE);
 	}
@@ -680,13 +702,21 @@ struct minherit_args {
 int
 sys_minherit(struct thread *td, struct minherit_args *uap)
 {
+
+	return (kern_minherit(td, (uintptr_t)uap->addr, uap->len,
+	    uap->inherit));
+}
+
+int
+kern_minherit(struct thread *td, uintptr_t addr0, size_t len, int inherit0)
+{
 	vm_offset_t addr;
 	vm_size_t size, pageoff;
 	vm_inherit_t inherit;
 
-	addr = (vm_offset_t)uap->addr;
-	size = uap->len;
-	inherit = uap->inherit;
+	addr = (vm_offset_t)addr0;
+	size = len;
+	inherit = inherit0;
 
 	pageoff = (addr & PAGE_MASK);
 	addr -= pageoff;
@@ -743,9 +773,7 @@ kern_madvise(struct thread *td, uintptr_t addr0, size_t len, int behav)
 	 */
 	map = &td->td_proc->p_vmspace->vm_map;
 	addr = addr0;
-	if (addr < vm_map_min(map) || addr + len > vm_map_max(map))
-		return (EINVAL);
-	if ((addr + len) < addr)
+	if (!vm_map_range_valid(map, addr, addr + len))
 		return (EINVAL);
 
 	/*
@@ -878,8 +906,7 @@ retry:
 				while (object == NULL || m->object != object) {
 					if (object != NULL)
 						VM_OBJECT_WUNLOCK(object);
-					object = (vm_object_t)atomic_load_ptr(
-					    &m->object);
+					object = atomic_load_ptr(&m->object);
 					if (object == NULL)
 						goto retry;
 					VM_OBJECT_WLOCK(object);
@@ -931,9 +958,9 @@ retry:
 				 * and set PGA_REFERENCED before the call to
 				 * pmap_is_referenced(). 
 				 */
-				if ((m->aflags & PGA_REFERENCED) != 0 ||
+				if ((m->a.flags & PGA_REFERENCED) != 0 ||
 				    pmap_is_referenced(m) ||
-				    (m->aflags & PGA_REFERENCED) != 0)
+				    (m->a.flags & PGA_REFERENCED) != 0)
 					mincoreinfo |= MINCORE_REFERENCED_OTHER;
 			}
 			if (object != NULL)
@@ -1325,17 +1352,19 @@ vm_mmap_vnode(struct thread *td, vm_size_t objsize,
 	} else {
 		KASSERT(obj->type == OBJT_DEFAULT || obj->type == OBJT_SWAP,
 		    ("wrong object type"));
-		VM_OBJECT_WLOCK(obj);
-		vm_object_reference_locked(obj);
+		vm_object_reference(obj);
 #if VM_NRESERVLEVEL > 0
-		vm_object_color(obj, 0);
+		if ((obj->flags & OBJ_COLORED) == 0) {
+			VM_OBJECT_WLOCK(obj);
+			vm_object_color(obj, 0);
+			VM_OBJECT_WUNLOCK(obj);
+		}
 #endif
-		VM_OBJECT_WUNLOCK(obj);
 	}
 	*objp = obj;
 	*flagsp = flags;
 
-	vfs_mark_atime(vp, cred);
+	VOP_MMAPPED(vp);
 
 done:
 	if (error != 0 && *writecounted) {

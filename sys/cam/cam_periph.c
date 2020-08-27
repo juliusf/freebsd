@@ -649,7 +649,7 @@ cam_periph_invalidate(struct cam_periph *periph)
 
 	cam_periph_assert(periph, MA_OWNED);
 	/*
-	 * We only call this routine the first time a peripheral is
+	 * We only tear down the device the first time a peripheral is
 	 * invalidated.
 	 */
 	if ((periph->flags & CAM_PERIPH_INVALID) != 0)
@@ -729,7 +729,9 @@ camperiphfree(struct cam_periph *periph)
 		periph->periph_dtor(periph);
 
 	/*
-	 * The peripheral list is protected by the topology lock.
+	 * The peripheral list is protected by the topology lock. We have to
+	 * remove the periph from the drv list before we call deferred_ac. The
+	 * AC_FOUND_DEVICE callback won't create a new periph if it's still there.
 	 */
 	xpt_lock_buses();
 
@@ -786,6 +788,7 @@ cam_periph_mapmem(union ccb *ccb, struct cam_periph_map_info *mapinfo,
 	u_int8_t **data_ptrs[CAM_PERIPH_MAXMAPS];
 	u_int32_t lengths[CAM_PERIPH_MAXMAPS];
 	u_int32_t dirs[CAM_PERIPH_MAXMAPS];
+	bool misaligned[CAM_PERIPH_MAXMAPS];
 
 	bzero(mapinfo, sizeof(*mapinfo));
 	if (maxmap == 0)
@@ -897,6 +900,12 @@ cam_periph_mapmem(union ccb *ccb, struct cam_periph_map_info *mapinfo,
 	 * have to unmap any previously mapped buffers.
 	 */
 	for (i = 0; i < numbufs; i++) {
+		if (lengths[i] > maxmap) {
+			printf("cam_periph_mapmem: attempt to map %lu bytes, "
+			       "which is greater than %lu\n",
+			       (long)(lengths[i]), (u_long)maxmap);
+			return (E2BIG);
+		}
 
 		/*
 		 * The userland data pointer passed in may not be page
@@ -906,15 +915,8 @@ cam_periph_mapmem(union ccb *ccb, struct cam_periph_map_info *mapinfo,
 		 * whatever extra space is necessary to make it to the page
 		 * boundary.
 		 */
-		if ((lengths[i] +
-		    (((vm_offset_t)(*data_ptrs[i])) & PAGE_MASK)) > maxmap){
-			printf("cam_periph_mapmem: attempt to map %lu bytes, "
-			       "which is greater than %lu\n",
-			       (long)(lengths[i] +
-			       (((vm_offset_t)(*data_ptrs[i])) & PAGE_MASK)),
-			       (u_long)maxmap);
-			return(E2BIG);
-		}
+		misaligned[i] = (lengths[i] +
+		    (((vm_offset_t)(*data_ptrs[i])) & PAGE_MASK) > MAXPHYS);
 	}
 
 	/*
@@ -938,7 +940,7 @@ cam_periph_mapmem(union ccb *ccb, struct cam_periph_map_info *mapinfo,
 		 * small allocations malloc is backed by UMA, and so much
 		 * cheaper on SMP systems.
 		 */
-		if (lengths[i] <= periph_mapmem_thresh &&
+		if ((lengths[i] <= periph_mapmem_thresh || misaligned[i]) &&
 		    ccb->ccb_h.func_code != XPT_MMC_IO) {
 			*data_ptrs[i] = malloc(lengths[i], M_CAMPERIPH,
 			    M_WAITOK);
@@ -969,14 +971,7 @@ cam_periph_mapmem(union ccb *ccb, struct cam_periph_map_info *mapinfo,
 		mapinfo->bp[i]->b_iocmd = (dirs[i] == CAM_DIR_OUT) ?
 		    BIO_WRITE : BIO_READ;
 
-		/*
-		 * Map the buffer into kernel memory.
-		 *
-		 * Note that useracc() alone is not a  sufficient test.
-		 * vmapbuf() can still fail due to a smaller file mapped
-		 * into a larger area of VM, or if userland races against
-		 * vmapbuf() after the useracc() check.
-		 */
+		/* Map the buffer into kernel memory. */
 		if (vmapbuf(mapinfo->bp[i], 1) < 0) {
 			uma_zfree(pbuf_zone, mapinfo->bp[i]);
 			goto fail;

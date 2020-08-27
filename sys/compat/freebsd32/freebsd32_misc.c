@@ -63,6 +63,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/namei.h>
 #include <sys/proc.h>
 #include <sys/procctl.h>
+#include <sys/ptrace.h>
 #include <sys/reboot.h>
 #include <sys/resource.h>
 #include <sys/resourcevar.h>
@@ -120,6 +121,31 @@ __FBSDID("$FreeBSD$");
 #include <compat/freebsd32/freebsd32_proto.h>
 
 FEATURE(compat_freebsd_32bit, "Compatible with 32-bit FreeBSD");
+
+struct ptrace_io_desc32 {
+	int		piod_op;
+	uint32_t	piod_offs;
+	uint32_t	piod_addr;
+	uint32_t	piod_len;
+};
+
+struct ptrace_sc_ret32 {
+	uint32_t	sr_retval[2];
+	int		sr_error;
+};
+
+struct ptrace_vm_entry32 {
+	int		pve_entry;
+	int		pve_timestamp;
+	uint32_t	pve_start;
+	uint32_t	pve_end;
+	uint32_t	pve_offset;
+	u_int		pve_prot;
+	u_int		pve_pathlen;
+	int32_t		pve_fileid;
+	u_int		pve_fsid;
+	uint32_t	pve_path;
+};
 
 #ifdef __amd64__
 CTASSERT(sizeof(struct timeval32) == 8);
@@ -856,6 +882,192 @@ freebsd32_getrusage(struct thread *td, struct freebsd32_getrusage_args *uap)
 	return (error);
 }
 
+static void
+ptrace_lwpinfo_to32(const struct ptrace_lwpinfo *pl,
+    struct ptrace_lwpinfo32 *pl32)
+{
+
+	bzero(pl32, sizeof(*pl32));
+	pl32->pl_lwpid = pl->pl_lwpid;
+	pl32->pl_event = pl->pl_event;
+	pl32->pl_flags = pl->pl_flags;
+	pl32->pl_sigmask = pl->pl_sigmask;
+	pl32->pl_siglist = pl->pl_siglist;
+	siginfo_to_siginfo32(&pl->pl_siginfo, &pl32->pl_siginfo);
+	strcpy(pl32->pl_tdname, pl->pl_tdname);
+	pl32->pl_child_pid = pl->pl_child_pid;
+	pl32->pl_syscall_code = pl->pl_syscall_code;
+	pl32->pl_syscall_narg = pl->pl_syscall_narg;
+}
+
+static void
+ptrace_sc_ret_to32(const struct ptrace_sc_ret *psr,
+    struct ptrace_sc_ret32 *psr32)
+{
+
+	bzero(psr32, sizeof(*psr32));
+	psr32->sr_retval[0] = psr->sr_retval[0];
+	psr32->sr_retval[1] = psr->sr_retval[1];
+	psr32->sr_error = psr->sr_error;
+}
+
+int
+freebsd32_ptrace(struct thread *td, struct freebsd32_ptrace_args *uap)
+{
+	union {
+		struct ptrace_io_desc piod;
+		struct ptrace_lwpinfo pl;
+		struct ptrace_vm_entry pve;
+		struct dbreg32 dbreg;
+		struct fpreg32 fpreg;
+		struct reg32 reg;
+		register_t args[nitems(td->td_sa.args)];
+		struct ptrace_sc_ret psr;
+		int ptevents;
+	} r;
+	union {
+		struct ptrace_io_desc32 piod;
+		struct ptrace_lwpinfo32 pl;
+		struct ptrace_vm_entry32 pve;
+		uint32_t args[nitems(td->td_sa.args)];
+		struct ptrace_sc_ret32 psr;
+	} r32;
+	void *addr;
+	int data, error = 0, i;
+
+	AUDIT_ARG_PID(uap->pid);
+	AUDIT_ARG_CMD(uap->req);
+	AUDIT_ARG_VALUE(uap->data);
+	addr = &r;
+	data = uap->data;
+	switch (uap->req) {
+	case PT_GET_EVENT_MASK:
+	case PT_GET_SC_ARGS:
+	case PT_GET_SC_RET:
+		break;
+	case PT_LWPINFO:
+		if (uap->data > sizeof(r32.pl))
+			return (EINVAL);
+
+		/*
+		 * Pass size of native structure in 'data'.  Truncate
+		 * if necessary to avoid siginfo.
+		 */
+		data = sizeof(r.pl);
+		if (uap->data < offsetof(struct ptrace_lwpinfo32, pl_siginfo) +
+		    sizeof(struct siginfo32))
+			data = offsetof(struct ptrace_lwpinfo, pl_siginfo);
+		break;
+	case PT_GETREGS:
+		bzero(&r.reg, sizeof(r.reg));
+		break;
+	case PT_GETFPREGS:
+		bzero(&r.fpreg, sizeof(r.fpreg));
+		break;
+	case PT_GETDBREGS:
+		bzero(&r.dbreg, sizeof(r.dbreg));
+		break;
+	case PT_SETREGS:
+		error = copyin(uap->addr, &r.reg, sizeof(r.reg));
+		break;
+	case PT_SETFPREGS:
+		error = copyin(uap->addr, &r.fpreg, sizeof(r.fpreg));
+		break;
+	case PT_SETDBREGS:
+		error = copyin(uap->addr, &r.dbreg, sizeof(r.dbreg));
+		break;
+	case PT_SET_EVENT_MASK:
+		if (uap->data != sizeof(r.ptevents))
+			error = EINVAL;
+		else
+			error = copyin(uap->addr, &r.ptevents, uap->data);
+		break;
+	case PT_IO:
+		error = copyin(uap->addr, &r32.piod, sizeof(r32.piod));
+		if (error)
+			break;
+		CP(r32.piod, r.piod, piod_op);
+		PTRIN_CP(r32.piod, r.piod, piod_offs);
+		PTRIN_CP(r32.piod, r.piod, piod_addr);
+		CP(r32.piod, r.piod, piod_len);
+		break;
+	case PT_VM_ENTRY:
+		error = copyin(uap->addr, &r32.pve, sizeof(r32.pve));
+		if (error)
+			break;
+
+		CP(r32.pve, r.pve, pve_entry);
+		CP(r32.pve, r.pve, pve_timestamp);
+		CP(r32.pve, r.pve, pve_start);
+		CP(r32.pve, r.pve, pve_end);
+		CP(r32.pve, r.pve, pve_offset);
+		CP(r32.pve, r.pve, pve_prot);
+		CP(r32.pve, r.pve, pve_pathlen);
+		CP(r32.pve, r.pve, pve_fileid);
+		CP(r32.pve, r.pve, pve_fsid);
+		PTRIN_CP(r32.pve, r.pve, pve_path);
+		break;
+	default:
+		addr = uap->addr;
+		break;
+	}
+	if (error)
+		return (error);
+
+	error = kern_ptrace(td, uap->req, uap->pid, addr, data);
+	if (error)
+		return (error);
+
+	switch (uap->req) {
+	case PT_VM_ENTRY:
+		CP(r.pve, r32.pve, pve_entry);
+		CP(r.pve, r32.pve, pve_timestamp);
+		CP(r.pve, r32.pve, pve_start);
+		CP(r.pve, r32.pve, pve_end);
+		CP(r.pve, r32.pve, pve_offset);
+		CP(r.pve, r32.pve, pve_prot);
+		CP(r.pve, r32.pve, pve_pathlen);
+		CP(r.pve, r32.pve, pve_fileid);
+		CP(r.pve, r32.pve, pve_fsid);
+		error = copyout(&r32.pve, uap->addr, sizeof(r32.pve));
+		break;
+	case PT_IO:
+		CP(r.piod, r32.piod, piod_len);
+		error = copyout(&r32.piod, uap->addr, sizeof(r32.piod));
+		break;
+	case PT_GETREGS:
+		error = copyout(&r.reg, uap->addr, sizeof(r.reg));
+		break;
+	case PT_GETFPREGS:
+		error = copyout(&r.fpreg, uap->addr, sizeof(r.fpreg));
+		break;
+	case PT_GETDBREGS:
+		error = copyout(&r.dbreg, uap->addr, sizeof(r.dbreg));
+		break;
+	case PT_GET_EVENT_MASK:
+		/* NB: The size in uap->data is validated in kern_ptrace(). */
+		error = copyout(&r.ptevents, uap->addr, uap->data);
+		break;
+	case PT_LWPINFO:
+		ptrace_lwpinfo_to32(&r.pl, &r32.pl);
+		error = copyout(&r32.pl, uap->addr, uap->data);
+		break;
+	case PT_GET_SC_ARGS:
+		for (i = 0; i < nitems(r.args); i++)
+			r32.args[i] = (uint32_t)r.args[i];
+		error = copyout(r32.args, uap->addr, MIN(uap->data,
+		    sizeof(r32.args)));
+		break;
+	case PT_GET_SC_RET:
+		ptrace_sc_ret_to32(&r.psr, &r32.psr);
+		error = copyout(&r32.psr, uap->addr, MIN(uap->data,
+		    sizeof(r32.psr)));
+		break;
+	}
+
+	return (error);
+}
+
 static int
 freebsd32_copyinuio(struct iovec32 *iovp, u_int iovcnt, struct uio **uiop)
 {
@@ -1237,78 +1449,90 @@ freebsd32_recvmsg(td, uap)
 static int
 freebsd32_copyin_control(struct mbuf **mp, caddr_t buf, u_int buflen)
 {
+	struct cmsghdr *cm;
 	struct mbuf *m;
-	void *md;
-	u_int idx, len, msglen;
+	void *in, *in1, *md;
+	u_int msglen, outlen;
 	int error;
-
-	buflen = FREEBSD32_ALIGN(buflen);
 
 	if (buflen > MCLBYTES)
 		return (EINVAL);
 
+	in = malloc(buflen, M_TEMP, M_WAITOK);
+	error = copyin(buf, in, buflen);
+	if (error != 0)
+		goto out;
+
 	/*
-	 * Iterate over the buffer and get the length of each message
-	 * in there. This has 32-bit alignment and padding. Use it to
-	 * determine the length of these messages when using 64-bit
-	 * alignment and padding.
+	 * Make a pass over the input buffer to determine the amount of space
+	 * required for 64 bit-aligned copies of the control messages.
 	 */
-	idx = 0;
-	len = 0;
-	while (idx < buflen) {
-		error = copyin(buf + idx, &msglen, sizeof(msglen));
-		if (error)
-			return (error);
-		if (msglen < sizeof(struct cmsghdr))
-			return (EINVAL);
-		msglen = FREEBSD32_ALIGN(msglen);
-		if (idx + msglen > buflen)
-			return (EINVAL);
-		idx += msglen;
-		msglen += CMSG_ALIGN(sizeof(struct cmsghdr)) -
-		    FREEBSD32_ALIGN(sizeof(struct cmsghdr));
-		len += CMSG_ALIGN(msglen);
-	}
-
-	if (len > MCLBYTES)
-		return (EINVAL);
-
-	m = m_get(M_WAITOK, MT_CONTROL);
-	if (len > MLEN)
-		MCLGET(m, M_WAITOK);
-	m->m_len = len;
-
-	md = mtod(m, void *);
+	in1 = in;
+	outlen = 0;
 	while (buflen > 0) {
-		error = copyin(buf, md, sizeof(struct cmsghdr));
-		if (error)
+		if (buflen < sizeof(*cm)) {
+			error = EINVAL;
 			break;
-		msglen = *(u_int *)md;
-		msglen = FREEBSD32_ALIGN(msglen);
-
-		/* Modify the message length to account for alignment. */
-		*(u_int *)md = msglen + CMSG_ALIGN(sizeof(struct cmsghdr)) -
-		    FREEBSD32_ALIGN(sizeof(struct cmsghdr));
-
-		md = (char *)md + CMSG_ALIGN(sizeof(struct cmsghdr));
-		buf += FREEBSD32_ALIGN(sizeof(struct cmsghdr));
-		buflen -= FREEBSD32_ALIGN(sizeof(struct cmsghdr));
-
-		msglen -= FREEBSD32_ALIGN(sizeof(struct cmsghdr));
-		if (msglen > 0) {
-			error = copyin(buf, md, msglen);
-			if (error)
-				break;
-			md = (char *)md + CMSG_ALIGN(msglen);
-			buf += msglen;
-			buflen -= msglen;
 		}
+		cm = (struct cmsghdr *)in1;
+		if (cm->cmsg_len < FREEBSD32_ALIGN(sizeof(*cm))) {
+			error = EINVAL;
+			break;
+		}
+		msglen = FREEBSD32_ALIGN(cm->cmsg_len);
+		if (msglen > buflen || msglen < cm->cmsg_len) {
+			error = EINVAL;
+			break;
+		}
+		buflen -= msglen;
+
+		in1 = (char *)in1 + msglen;
+		outlen += CMSG_ALIGN(sizeof(*cm)) +
+		    CMSG_ALIGN(msglen - FREEBSD32_ALIGN(sizeof(*cm)));
+	}
+	if (error == 0 && outlen > MCLBYTES) {
+		/*
+		 * XXXMJ This implies that the upper limit on 32-bit aligned
+		 * control messages is less than MCLBYTES, and so we are not
+		 * perfectly compatible.  However, there is no platform
+		 * guarantee that mbuf clusters larger than MCLBYTES can be
+		 * allocated.
+		 */
+		error = EINVAL;
+	}
+	if (error != 0)
+		goto out;
+
+	m = m_get2(outlen, M_WAITOK, MT_CONTROL, 0);
+	m->m_len = outlen;
+	md = mtod(m, void *);
+
+	/*
+	 * Make a second pass over input messages, copying them into the output
+	 * buffer.
+	 */
+	in1 = in;
+	while (outlen > 0) {
+		/* Copy the message header and align the length field. */
+		cm = md;
+		memcpy(cm, in1, sizeof(*cm));
+		msglen = cm->cmsg_len - FREEBSD32_ALIGN(sizeof(*cm));
+		cm->cmsg_len = CMSG_ALIGN(sizeof(*cm)) + msglen;
+
+		/* Copy the message body. */
+		in1 = (char *)in1 + FREEBSD32_ALIGN(sizeof(*cm));
+		md = (char *)md + CMSG_ALIGN(sizeof(*cm));
+		memcpy(md, in1, msglen);
+		in1 = (char *)in1 + FREEBSD32_ALIGN(msglen);
+		md = (char *)md + CMSG_ALIGN(msglen);
+		KASSERT(outlen >= CMSG_ALIGN(sizeof(*cm)) + CMSG_ALIGN(msglen),
+		    ("outlen %u underflow, msglen %u", outlen, msglen));
+		outlen -= CMSG_ALIGN(sizeof(*cm)) + CMSG_ALIGN(msglen);
 	}
 
-	if (error)
-		m_free(m);
-	else
-		*mp = m;
+	*mp = m;
+out:
+	free(in, M_TEMP);
 	return (error);
 }
 
@@ -2651,7 +2875,7 @@ freebsd32_user_clock_nanosleep(struct thread *td, clockid_t clock_id,
 {
 	struct timespec32 rmt32, rqt32;
 	struct timespec rmt, rqt;
-	int error;
+	int error, error2;
 
 	error = copyin(ua_rqtp, &rqt32, sizeof(rqt32));
 	if (error)
@@ -2660,18 +2884,13 @@ freebsd32_user_clock_nanosleep(struct thread *td, clockid_t clock_id,
 	CP(rqt32, rqt, tv_sec);
 	CP(rqt32, rqt, tv_nsec);
 
-	if (ua_rmtp != NULL && (flags & TIMER_ABSTIME) == 0 &&
-	    !useracc(ua_rmtp, sizeof(rmt32), VM_PROT_WRITE))
-		return (EFAULT);
 	error = kern_clock_nanosleep(td, clock_id, flags, &rqt, &rmt);
 	if (error == EINTR && ua_rmtp != NULL && (flags & TIMER_ABSTIME) == 0) {
-		int error2;
-
 		CP(rmt, rmt32, tv_sec);
 		CP(rmt, rmt32, tv_nsec);
 
 		error2 = copyout(&rmt32, ua_rmtp, sizeof(rmt32));
-		if (error2)
+		if (error2 != 0)
 			error = error2;
 	}
 	return (error);
@@ -3120,12 +3339,12 @@ syscall32_helper_unregister(struct syscall_helper_data *sd)
 }
 
 int
-freebsd32_copyout_strings(struct image_params *imgp, register_t **stack_base)
+freebsd32_copyout_strings(struct image_params *imgp, uintptr_t *stack_base)
 {
 	int argc, envc, i;
 	u_int32_t *vectp;
 	char *stringp;
-	uintptr_t destp;
+	uintptr_t destp, ustringp;
 	struct freebsd32_ps_strings *arginfo;
 	char canary[sizeof(long) * 8];
 	int32_t pagesizes32[MAXPAGESIZES];
@@ -3142,6 +3361,7 @@ freebsd32_copyout_strings(struct image_params *imgp, register_t **stack_base)
 		execpath_len = 0;
 	arginfo = (struct freebsd32_ps_strings *)curproc->p_sysent->
 	    sv_psstrings;
+	imgp->ps_strings = arginfo;
 	if (imgp->proc->p_sysent->sv_sigcode_base == 0)
 		szsigcode = *(imgp->proc->p_sysent->sv_szsigcode);
 	else
@@ -3165,8 +3385,8 @@ freebsd32_copyout_strings(struct image_params *imgp, register_t **stack_base)
 	 */
 	if (execpath_len != 0) {
 		destp -= execpath_len;
-		imgp->execpathp = destp;
-		error = copyout(imgp->execpath, (void *)destp, execpath_len);
+		imgp->execpathp = (void *)destp;
+		error = copyout(imgp->execpath, imgp->execpathp, execpath_len);
 		if (error != 0)
 			return (error);
 	}
@@ -3176,8 +3396,8 @@ freebsd32_copyout_strings(struct image_params *imgp, register_t **stack_base)
 	 */
 	arc4rand(canary, sizeof(canary), 0);
 	destp -= sizeof(canary);
-	imgp->canary = destp;
-	error = copyout(canary, (void *)destp, sizeof(canary));
+	imgp->canary = (void *)destp;
+	error = copyout(canary, imgp->canary, sizeof(canary));
 	if (error != 0)
 		return (error);
 	imgp->canarylen = sizeof(canary);
@@ -3189,25 +3409,32 @@ freebsd32_copyout_strings(struct image_params *imgp, register_t **stack_base)
 		pagesizes32[i] = (uint32_t)pagesizes[i];
 	destp -= sizeof(pagesizes32);
 	destp = rounddown2(destp, sizeof(uint32_t));
-	imgp->pagesizes = destp;
-	error = copyout(pagesizes32, (void *)destp, sizeof(pagesizes32));
+	imgp->pagesizes = (void *)destp;
+	error = copyout(pagesizes32, imgp->pagesizes, sizeof(pagesizes32));
 	if (error != 0)
 		return (error);
 	imgp->pagesizeslen = sizeof(pagesizes32);
 
+	/*
+	 * Allocate room for the argument and environment strings.
+	 */
 	destp -= ARG_MAX - imgp->args->stringspace;
 	destp = rounddown2(destp, sizeof(uint32_t));
+	ustringp = destp;
 
-	vectp = (uint32_t *)destp;
 	if (imgp->sysent->sv_stackgap != NULL)
-		imgp->sysent->sv_stackgap(imgp, (u_long *)&vectp);
+		imgp->sysent->sv_stackgap(imgp, &destp);
 
 	if (imgp->auxargs) {
-		error = imgp->sysent->sv_copyout_auxargs(imgp,
-		    (u_long *)&vectp);
-		if (error != 0)
-			return (error);
+		/*
+		 * Allocate room on the stack for the ELF auxargs
+		 * array.  It has up to AT_COUNT entries.
+		 */
+		destp -= AT_COUNT * sizeof(Elf32_Auxinfo);
+		destp = rounddown2(destp, sizeof(uint32_t));
 	}
+
+	vectp = (uint32_t *)destp;
 
 	/*
 	 * Allocate room for the argv[] and env vectors including the
@@ -3218,7 +3445,7 @@ freebsd32_copyout_strings(struct image_params *imgp, register_t **stack_base)
 	/*
 	 * vectp also becomes our initial stack base
 	 */
-	*stack_base = (register_t *)vectp;
+	*stack_base = (uintptr_t)vectp;
 
 	stringp = imgp->args->begin_argv;
 	argc = imgp->args->argc;
@@ -3226,7 +3453,7 @@ freebsd32_copyout_strings(struct image_params *imgp, register_t **stack_base)
 	/*
 	 * Copy out strings - arguments and environment.
 	 */
-	error = copyout(stringp, (void *)destp,
+	error = copyout(stringp, (void *)ustringp,
 	    ARG_MAX - imgp->args->stringspace);
 	if (error != 0)
 		return (error);
@@ -3234,6 +3461,7 @@ freebsd32_copyout_strings(struct image_params *imgp, register_t **stack_base)
 	/*
 	 * Fill in "ps_strings" struct for ps, w, etc.
 	 */
+	imgp->argv = vectp;
 	if (suword32(&arginfo->ps_argvstr, (u_int32_t)(intptr_t)vectp) != 0 ||
 	    suword32(&arginfo->ps_nargvstr, argc) != 0)
 		return (EFAULT);
@@ -3242,17 +3470,18 @@ freebsd32_copyout_strings(struct image_params *imgp, register_t **stack_base)
 	 * Fill in argument portion of vector table.
 	 */
 	for (; argc > 0; --argc) {
-		if (suword32(vectp++, (u_int32_t)(intptr_t)destp) != 0)
+		if (suword32(vectp++, ustringp) != 0)
 			return (EFAULT);
 		while (*stringp++ != 0)
-			destp++;
-		destp++;
+			ustringp++;
+		ustringp++;
 	}
 
 	/* a null vector table pointer separates the argp's from the envp's */
 	if (suword32(vectp++, 0) != 0)
 		return (EFAULT);
 
+	imgp->envv = vectp;
 	if (suword32(&arginfo->ps_envstr, (u_int32_t)(intptr_t)vectp) != 0 ||
 	    suword32(&arginfo->ps_nenvstr, envc) != 0)
 		return (EFAULT);
@@ -3261,16 +3490,24 @@ freebsd32_copyout_strings(struct image_params *imgp, register_t **stack_base)
 	 * Fill in environment portion of vector table.
 	 */
 	for (; envc > 0; --envc) {
-		if (suword32(vectp++, (u_int32_t)(intptr_t)destp) != 0)
+		if (suword32(vectp++, ustringp) != 0)
 			return (EFAULT);
 		while (*stringp++ != 0)
-			destp++;
-		destp++;
+			ustringp++;
+		ustringp++;
 	}
 
 	/* end of vector table is a null pointer */
 	if (suword32(vectp, 0) != 0)
 		return (EFAULT);
+
+	if (imgp->auxargs) {
+		vectp++;
+		error = imgp->sysent->sv_copyout_auxargs(imgp,
+		    (uintptr_t)vectp);
+		if (error != 0)
+			return (error);
+	}
 
 	return (0);
 }

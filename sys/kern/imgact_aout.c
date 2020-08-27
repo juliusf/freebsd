@@ -65,7 +65,7 @@ __FBSDID("$FreeBSD$");
 #endif
 
 static int	exec_aout_imgact(struct image_params *imgp);
-static int	aout_fixup(register_t **stack_base, struct image_params *imgp);
+static int	aout_fixup(uintptr_t *stack_base, struct image_params *imgp);
 
 #define	AOUT32_USRSTACK		0xbfc00000
 
@@ -147,11 +147,13 @@ struct sysentvec aout_sysvec = {
 #endif
 
 static int
-aout_fixup(register_t **stack_base, struct image_params *imgp)
+aout_fixup(uintptr_t *stack_base, struct image_params *imgp)
 {
 
-	*(char **)stack_base -= sizeof(uint32_t);
-	return (suword32(*stack_base, imgp->args->argc));
+	*stack_base -= sizeof(uint32_t);
+	if (suword32((void *)*stack_base, imgp->args->argc) != 0)
+		return (EFAULT);
+	return (0);
 }
 
 static int
@@ -198,7 +200,7 @@ exec_aout_imgact(struct image_params *imgp)
 		file_offset = 0;
 		/* Pass PS_STRINGS for BSD/OS binaries only. */
 		if (N_GETMID(*a_out) == MID_ZERO)
-			imgp->ps_strings = aout_sysvec.sv_psstrings;
+			imgp->ps_strings = (void *)aout_sysvec.sv_psstrings;
 		break;
 	default:
 		/* NetBSD compatibility */
@@ -260,7 +262,7 @@ exec_aout_imgact(struct image_params *imgp)
 	 * However, in cases where the vnode lock is external, such as nullfs,
 	 * v_usecount may become zero.
 	 */
-	VOP_UNLOCK(imgp->vp, 0);
+	VOP_UNLOCK(imgp->vp);
 
 	/*
 	 * Destroy old process VM and create a new one (with a new stack)

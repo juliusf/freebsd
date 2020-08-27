@@ -223,8 +223,6 @@ bus_dma_tag_create(bus_dma_tag_t parent, bus_size_t alignment,
 	struct bus_dma_tag_common *tc;
 	int error;
 
-	WITNESS_WARN(WARN_GIANTOK | WARN_SLEEPOK, NULL, "%s", __func__);
-
 	if (parent == NULL) {
 		error = bus_dma_bounce_impl.tag_create(parent, alignment,
 		    boundary, lowaddr, highaddr, filter, filterarg, maxsize,
@@ -238,6 +236,60 @@ bus_dma_tag_create(bus_dma_tag_t parent, bus_size_t alignment,
 	return (error);
 }
 
+void
+bus_dma_template_init(bus_dma_tag_template_t *t, bus_dma_tag_t parent)
+{
+
+	if (t == NULL)
+		return;
+
+	t->parent = parent;
+	t->alignment = 1;
+	t->boundary = 0;
+	t->lowaddr = t->highaddr = BUS_SPACE_MAXADDR;
+	t->maxsize = t->maxsegsize = BUS_SPACE_MAXSIZE;
+	t->nsegments = BUS_SPACE_UNRESTRICTED;
+	t->lockfunc = NULL;
+	t->lockfuncarg = NULL;
+	t->flags = 0;
+}
+
+int
+bus_dma_template_tag(bus_dma_tag_template_t *t, bus_dma_tag_t *dmat)
+{
+
+	if (t == NULL || dmat == NULL)
+		return (EINVAL);
+
+	return (bus_dma_tag_create(t->parent, t->alignment, t->boundary,
+	    t->lowaddr, t->highaddr, NULL, NULL, t->maxsize,
+	    t->nsegments, t->maxsegsize, t->flags, t->lockfunc, t->lockfuncarg,
+	    dmat));
+}
+
+void
+bus_dma_template_clone(bus_dma_tag_template_t *t, bus_dma_tag_t dmat)
+{
+	struct bus_dma_tag_common *common;
+
+	if (t == NULL || dmat == NULL)
+		return;
+
+	common = (struct bus_dma_tag_common *)dmat;
+
+	t->parent = (bus_dma_tag_t)common->parent;
+	t->alignment = common->alignment;
+	t->boundary = common->boundary;
+	t->lowaddr = common->lowaddr;
+	t->highaddr = common->highaddr;
+	t->maxsize = common->maxsize;
+	t->nsegments = common->nsegments;
+	t->maxsegsize = common->maxsegsz;
+	t->flags = common->flags;
+	t->lockfunc = common->lockfunc;
+	t->lockfuncarg = common->lockfuncarg;
+}
+
 int
 bus_dma_tag_destroy(bus_dma_tag_t dmat)
 {
@@ -248,9 +300,20 @@ bus_dma_tag_destroy(bus_dma_tag_t dmat)
 }
 
 #ifndef ACPI_DMAR
+bool bus_dma_iommu_set_buswide(device_t dev);
+int bus_dma_iommu_load_ident(bus_dma_tag_t dmat, bus_dmamap_t map,   
+    vm_paddr_t start, vm_size_t length, int flags);
+
 bool
-bus_dma_dmar_set_buswide(device_t dev)
+bus_dma_iommu_set_buswide(device_t dev)
 {
 	return (false);
+}
+
+int
+bus_dma_iommu_load_ident(bus_dma_tag_t dmat, bus_dmamap_t map,
+    vm_paddr_t start, vm_size_t length, int flags)
+{
+	return (0);
 }
 #endif

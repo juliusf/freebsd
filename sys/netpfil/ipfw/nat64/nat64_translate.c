@@ -29,6 +29,8 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#include "opt_ipstealth.h"
+
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/counter.h>
@@ -48,9 +50,11 @@ __FBSDID("$FreeBSD$");
 #include <net/pfil.h>
 #include <net/netisr.h>
 #include <net/route.h>
+#include <net/route/nhop.h>
 
 #include <netinet/in.h>
 #include <netinet/in_fib.h>
+#include <netinet/in_var.h>
 #include <netinet/ip.h>
 #include <netinet/ip_var.h>
 #include <netinet/ip_fw.h>
@@ -77,9 +81,9 @@ typedef int (*nat64_output_t)(struct ifnet *, struct mbuf *,
 typedef int (*nat64_output_one_t)(struct mbuf *, struct nat64_counters *,
     void *);
 
-static int nat64_find_route4(struct nhop4_basic *, struct sockaddr_in *,
+static struct nhop_object *nat64_find_route4(struct sockaddr_in *,
     struct mbuf *);
-static int nat64_find_route6(struct nhop6_basic *, struct sockaddr_in6 *,
+static struct nhop_object *nat64_find_route6(struct sockaddr_in6 *,
     struct mbuf *);
 static int nat64_output_one(struct mbuf *, struct nat64_counters *, void *);
 static int nat64_output(struct ifnet *, struct mbuf *, struct sockaddr *,
@@ -101,14 +105,39 @@ static const struct nat64_methods nat64_direct = {
 	.output = nat64_direct_output,
 	.output_one = nat64_direct_output_one
 };
-VNET_DEFINE_STATIC(const struct nat64_methods *, nat64out) = &nat64_netisr;
-#define	V_nat64out	VNET(nat64out)
+
+/* These variables should be initialized explicitly on module loading */
+VNET_DEFINE_STATIC(const struct nat64_methods *, nat64out);
+VNET_DEFINE_STATIC(const int *, nat64ipstealth);
+VNET_DEFINE_STATIC(const int *, nat64ip6stealth);
+#define	V_nat64out		VNET(nat64out)
+#define	V_nat64ipstealth	VNET(nat64ipstealth)
+#define	V_nat64ip6stealth	VNET(nat64ip6stealth)
+
+static const int stealth_on = 1;
+#ifndef IPSTEALTH
+static const int stealth_off = 0;
+#endif
 
 void
 nat64_set_output_method(int direct)
 {
 
-	V_nat64out = direct != 0 ? &nat64_direct: &nat64_netisr;
+	if (direct != 0) {
+		V_nat64out = &nat64_direct;
+#ifdef IPSTEALTH
+		/* Honor corresponding variables, if IPSTEALTH is defined */
+		V_nat64ipstealth = &V_ipstealth;
+		V_nat64ip6stealth = &V_ip6stealth;
+#else
+		/* otherwise we need to decrement HLIM/TTL for direct case */
+		V_nat64ipstealth = V_nat64ip6stealth = &stealth_off;
+#endif
+	} else {
+		V_nat64out = &nat64_netisr;
+		/* Leave TTL/HLIM decrementing to forwarding code */
+		V_nat64ipstealth = V_nat64ip6stealth = &stealth_on;
+	}
 }
 
 int
@@ -145,8 +174,8 @@ static int
 nat64_direct_output_one(struct mbuf *m, struct nat64_counters *stats,
     void *logdata)
 {
-	struct nhop6_basic nh6;
-	struct nhop4_basic nh4;
+	struct nhop_object *nh4 = NULL;
+	struct nhop_object *nh6 = NULL;
 	struct sockaddr_in6 dst6;
 	struct sockaddr_in dst4;
 	struct sockaddr *dst;
@@ -156,25 +185,28 @@ nat64_direct_output_one(struct mbuf *m, struct nat64_counters *stats,
 	int error;
 
 	ip4 = mtod(m, struct ip *);
+	error = 0;
 	switch (ip4->ip_v) {
 	case IPVERSION:
 		dst4.sin_addr = ip4->ip_dst;
-		error = nat64_find_route4(&nh4, &dst4, m);
-		if (error != 0)
+		nh4 = nat64_find_route4(&dst4, m);
+		if (nh4 == NULL) {
 			NAT64STAT_INC(stats, noroute4);
-		else {
-			ifp = nh4.nh_ifp;
+			error = EHOSTUNREACH;
+		} else {
+			ifp = nh4->nh_ifp;
 			dst = (struct sockaddr *)&dst4;
 		}
 		break;
 	case (IPV6_VERSION >> 4):
 		ip6 = mtod(m, struct ip6_hdr *);
 		dst6.sin6_addr = ip6->ip6_dst;
-		error = nat64_find_route6(&nh6, &dst6, m);
-		if (error != 0)
+		nh6 = nat64_find_route6(&dst6, m);
+		if (nh6 == NULL) {
 			NAT64STAT_INC(stats, noroute6);
-		else {
-			ifp = nh6.nh_ifp;
+			error = EHOSTUNREACH;
+		} else {
+			ifp = nh6->nh_ifp;
 			dst = (struct sockaddr *)&dst6;
 		}
 		break;
@@ -486,8 +518,7 @@ nat64_init_ip4hdr(const struct ip6_hdr *ip6, const struct ip6_frag *frag,
 	ip->ip_tos = (ntohl(ip6->ip6_flow) >> 20) & 0xff;
 	ip->ip_len = htons(sizeof(*ip) + plen);
 	ip->ip_ttl = ip6->ip6_hlim;
-	/* Forwarding code will decrement TTL for netisr based output. */
-	if (V_nat64out == &nat64_direct)
+	if (*V_nat64ip6stealth == 0)
 		ip->ip_ttl -= IPV6_HLIMDEC;
 	ip->ip_sum = 0;
 	ip->ip_p = (proto == IPPROTO_ICMPV6) ? IPPROTO_ICMP: proto;
@@ -588,31 +619,31 @@ fail:
 	return (ENOMEM);
 }
 
-static NAT64NOINLINE int
-nat64_find_route6(struct nhop6_basic *pnh, struct sockaddr_in6 *dst,
-    struct mbuf *m)
+static struct nhop_object *
+nat64_find_route6(struct sockaddr_in6 *dst, struct mbuf *m)
 {
-
-	if (fib6_lookup_nh_basic(M_GETFIB(m), &dst->sin6_addr, 0, 0, 0,
-	    pnh) != 0)
-		return (EHOSTUNREACH);
-	if (pnh->nh_flags & (NHF_BLACKHOLE | NHF_REJECT))
-		return (EHOSTUNREACH);
+	struct nhop_object *nh;
+	NET_EPOCH_ASSERT();
+	nh = fib6_lookup(M_GETFIB(m), &dst->sin6_addr, 0, 0, 0);
+	if (nh == NULL)
+		return NULL;
+	if (nh->nh_flags & (NHF_BLACKHOLE | NHF_REJECT))
+		return NULL;
 	/*
 	 * XXX: we need to use destination address with embedded scope
 	 * zone id, because LLTABLE uses such form of addresses for lookup.
 	 */
 	dst->sin6_family = AF_INET6;
 	dst->sin6_len = sizeof(*dst);
-	dst->sin6_addr = pnh->nh_addr;
+	dst->sin6_addr = ifatoia6(nh->nh_ifa)->ia_addr.sin6_addr;
 	if (IN6_IS_SCOPE_LINKLOCAL(&dst->sin6_addr))
 		dst->sin6_addr.s6_addr16[1] =
-		    htons(pnh->nh_ifp->if_index & 0xffff);
+		    htons(nh->nh_ifp->if_index & 0xffff);
 	dst->sin6_port = 0;
 	dst->sin6_scope_id = 0;
 	dst->sin6_flowinfo = 0;
 
-	return (0);
+	return nh;
 }
 
 #define	NAT64_ICMP6_PLEN	64
@@ -623,18 +654,18 @@ nat64_icmp6_reflect(struct mbuf *m, uint8_t type, uint8_t code, uint32_t mtu,
 	struct icmp6_hdr *icmp6;
 	struct ip6_hdr *ip6, *oip6;
 	struct mbuf *n;
-	int len, plen;
+	int len, plen, proto;
 
 	len = 0;
-	plen = nat64_getlasthdr(m, &len);
-	if (plen < 0) {
+	proto = nat64_getlasthdr(m, &len);
+	if (proto < 0) {
 		DPRINTF(DP_DROPS, "mbuf isn't contigious");
 		goto freeit;
 	}
 	/*
 	 * Do not send ICMPv6 in reply to ICMPv6 errors.
 	 */
-	if (plen == IPPROTO_ICMPV6) {
+	if (proto == IPPROTO_ICMPV6) {
 		if (m->m_len < len + sizeof(*icmp6)) {
 			DPRINTF(DP_DROPS, "mbuf isn't contigious");
 			goto freeit;
@@ -645,6 +676,21 @@ nat64_icmp6_reflect(struct mbuf *m, uint8_t type, uint8_t code, uint32_t mtu,
 			DPRINTF(DP_DROPS, "do not send ICMPv6 in reply to "
 			    "ICMPv6 errors");
 			goto freeit;
+		}
+		/*
+		 * If there are extra headers between IPv6 and ICMPv6,
+		 * strip off them.
+		 */
+		if (len > sizeof(struct ip6_hdr)) {
+			/*
+			 * NOTE: ipfw_chk already did m_pullup() and it is
+			 * expected that data is contigious from the start
+			 * of IPv6 header up to the end of ICMPv6 header.
+			 */
+			bcopy(mtod(m, caddr_t),
+			    mtodo(m, len - sizeof(struct ip6_hdr)),
+			    sizeof(struct ip6_hdr));
+			m_adj(m, len - sizeof(struct ip6_hdr));
 		}
 	}
 	/*
@@ -687,7 +733,19 @@ nat64_icmp6_reflect(struct mbuf *m, uint8_t type, uint8_t code, uint32_t mtu,
 
 	n->m_len = n->m_pkthdr.len = sizeof(struct ip6_hdr) + plen;
 	oip6 = mtod(n, struct ip6_hdr *);
-	oip6->ip6_src = ip6->ip6_dst;
+	/*
+	 * Make IPv6 source address selection for reflected datagram.
+	 * nat64_check_ip6() doesn't allow scoped addresses, therefore
+	 * we use zero scopeid.
+	 */
+	if (in6_selectsrc_addr(M_GETFIB(n), &ip6->ip6_src, 0,
+	    n->m_pkthdr.rcvif, &oip6->ip6_src, NULL) != 0) {
+		/*
+		 * Failed to find proper source address, drop the packet.
+		 */
+		m_freem(n);
+		goto freeit;
+	}
 	oip6->ip6_dst = ip6->ip6_src;
 	oip6->ip6_nxt = IPPROTO_ICMPV6;
 	oip6->ip6_flow = 0;
@@ -713,21 +771,23 @@ freeit:
 	m_freem(m);
 }
 
-static NAT64NOINLINE int
-nat64_find_route4(struct nhop4_basic *pnh, struct sockaddr_in *dst,
-    struct mbuf *m)
+static struct nhop_object *
+nat64_find_route4(struct sockaddr_in *dst, struct mbuf *m)
 {
+	struct nhop_object *nh;
 
-	if (fib4_lookup_nh_basic(M_GETFIB(m), dst->sin_addr, 0, 0, pnh) != 0)
-		return (EHOSTUNREACH);
-	if (pnh->nh_flags & (NHF_BLACKHOLE | NHF_BROADCAST | NHF_REJECT))
-		return (EHOSTUNREACH);
+	NET_EPOCH_ASSERT();
+	nh = fib4_lookup(M_GETFIB(m), dst->sin_addr, 0, 0, 0);
+	if (nh == NULL)
+		return NULL;
+	if (nh->nh_flags & (NHF_BLACKHOLE | NHF_BROADCAST | NHF_REJECT))
+		return NULL;
 
 	dst->sin_family = AF_INET;
 	dst->sin_len = sizeof(*dst);
-	dst->sin_addr = pnh->nh_addr;
+	dst->sin_addr = IA_SIN(nh->nh_ifa)->sin_addr;
 	dst->sin_port = 0;
-	return (0);
+	return nh;
 }
 
 #define	NAT64_ICMP_PLEN	64
@@ -1170,7 +1230,7 @@ nat64_do_handle_ip4(struct mbuf *m, struct in6_addr *saddr,
     struct in6_addr *daddr, uint16_t lport, struct nat64_config *cfg,
     void *logdata)
 {
-	struct nhop6_basic nh;
+	struct nhop_object *nh;
 	struct ip6_hdr ip6;
 	struct sockaddr_in6 dst;
 	struct ip *ip;
@@ -1182,7 +1242,7 @@ nat64_do_handle_ip4(struct mbuf *m, struct in6_addr *saddr,
 
 	ip = mtod(m, struct ip*);
 
-	if (ip->ip_ttl <= IPTTLDEC) {
+	if (*V_nat64ipstealth == 0 && ip->ip_ttl <= IPTTLDEC) {
 		nat64_icmp_reflect(m, ICMP_TIMXCEED,
 		    ICMP_TIMXCEED_INTRANS, 0, &cfg->stats, logdata);
 		return (NAT64RETURN);
@@ -1213,27 +1273,33 @@ nat64_do_handle_ip4(struct mbuf *m, struct in6_addr *saddr,
 	}
 
 	dst.sin6_addr = ip6.ip6_dst;
-	if (nat64_find_route6(&nh, &dst, m) != 0) {
+	nh = nat64_find_route6(&dst, m);
+	if (nh == NULL) {
 		NAT64STAT_INC(&cfg->stats, noroute6);
 		nat64_icmp_reflect(m, ICMP_UNREACH, ICMP_UNREACH_HOST, 0,
 		    &cfg->stats, logdata);
 		return (NAT64RETURN);
 	}
-	if (nh.nh_mtu < plen + sizeof(ip6) &&
+	if (nh->nh_mtu < plen + sizeof(ip6) &&
 	    (ip->ip_off & htons(IP_DF)) != 0) {
 		nat64_icmp_reflect(m, ICMP_UNREACH, ICMP_UNREACH_NEEDFRAG,
-		    FRAGSZ(nh.nh_mtu) + sizeof(struct ip), &cfg->stats, logdata);
+		    FRAGSZ(nh->nh_mtu) + sizeof(struct ip), &cfg->stats, logdata);
 		return (NAT64RETURN);
 	}
 
 	ip6.ip6_flow = htonl(ip->ip_tos << 20);
 	ip6.ip6_vfc |= IPV6_VERSION;
 	ip6.ip6_hlim = ip->ip_ttl;
-	/* Forwarding code will decrement TTL for netisr based output. */
-	if (V_nat64out == &nat64_direct)
+	if (*V_nat64ipstealth == 0)
 		ip6.ip6_hlim -= IPTTLDEC;
 	ip6.ip6_plen = htons(plen);
 	ip6.ip6_nxt = (proto == IPPROTO_ICMP) ? IPPROTO_ICMPV6: proto;
+
+	/* Handle delayed checksums if needed. */
+	if (m->m_pkthdr.csum_flags & CSUM_DELAY_DATA) {
+		in_delayed_cksum(m);
+		m->m_pkthdr.csum_flags &= ~CSUM_DELAY_DATA;
+	}
 	/* Convert checksums. */
 	switch (proto) {
 	case IPPROTO_TCP:
@@ -1262,9 +1328,9 @@ nat64_do_handle_ip4(struct mbuf *m, struct in6_addr *saddr,
 
 	m_adj(m, hlen);
 	mbufq_init(&mq, 255);
-	nat64_fragment6(&cfg->stats, &ip6, &mq, m, nh.nh_mtu, ip_id, ip_off);
+	nat64_fragment6(&cfg->stats, &ip6, &mq, m, nh->nh_mtu, ip_id, ip_off);
 	while ((m = mbufq_dequeue(&mq)) != NULL) {
-		if (V_nat64out->output(nh.nh_ifp, m, (struct sockaddr *)&dst,
+		if (V_nat64out->output(nh->nh_ifp, m, (struct sockaddr *)&dst,
 		    &cfg->stats, logdata) != 0)
 			break;
 		NAT64STAT_INC(&cfg->stats, opcnt46);
@@ -1499,7 +1565,7 @@ nat64_do_handle_ip6(struct mbuf *m, uint32_t aaddr, uint16_t aport,
     struct nat64_config *cfg, void *logdata)
 {
 	struct ip ip;
-	struct nhop4_basic nh;
+	struct nhop_object *nh;
 	struct sockaddr_in dst;
 	struct ip6_frag *frag;
 	struct ip6_hdr *ip6;
@@ -1533,7 +1599,7 @@ nat64_do_handle_ip6(struct mbuf *m, uint32_t aaddr, uint16_t aport,
 		return (NAT64MFREE);
 	}
 
-	if (ip6->ip6_hlim <= IPV6_HLIMDEC) {
+	if (*V_nat64ip6stealth == 0 && ip6->ip6_hlim <= IPV6_HLIMDEC) {
 		nat64_icmp6_reflect(m, ICMP6_TIME_EXCEEDED,
 		    ICMP6_TIME_EXCEED_TRANSIT, 0, &cfg->stats, logdata);
 		return (NAT64RETURN);
@@ -1592,18 +1658,25 @@ nat64_do_handle_ip6(struct mbuf *m, uint32_t aaddr, uint16_t aport,
 			    cfg, logdata));
 	}
 	dst.sin_addr.s_addr = ip.ip_dst.s_addr;
-	if (nat64_find_route4(&nh, &dst, m) != 0) {
+	nh = nat64_find_route4(&dst, m);
+	if (nh == NULL) {
 		NAT64STAT_INC(&cfg->stats, noroute4);
 		nat64_icmp6_reflect(m, ICMP6_DST_UNREACH,
 		    ICMP6_DST_UNREACH_NOROUTE, 0, &cfg->stats, logdata);
 		return (NAT64RETURN);
 	}
-	if (nh.nh_mtu < plen + sizeof(ip)) {
-		nat64_icmp6_reflect(m, ICMP6_PACKET_TOO_BIG, 0, nh.nh_mtu,
+	if (nh->nh_mtu < plen + sizeof(ip)) {
+		nat64_icmp6_reflect(m, ICMP6_PACKET_TOO_BIG, 0, nh->nh_mtu,
 		    &cfg->stats, logdata);
 		return (NAT64RETURN);
 	}
 	nat64_init_ip4hdr(ip6, frag, plen, proto, &ip);
+
+	/* Handle delayed checksums if needed. */
+	if (m->m_pkthdr.csum_flags & CSUM_DELAY_DATA_IPV6) {
+		in6_delayed_cksum(m, plen, hlen);
+		m->m_pkthdr.csum_flags &= ~CSUM_DELAY_DATA_IPV6;
+	}
 	/* Convert checksums. */
 	switch (proto) {
 	case IPPROTO_TCP:
@@ -1647,7 +1720,7 @@ nat64_do_handle_ip6(struct mbuf *m, uint32_t aaddr, uint16_t aport,
 
 	m_adj(m, hlen - sizeof(ip));
 	bcopy(&ip, mtod(m, void *), sizeof(ip));
-	if (V_nat64out->output(nh.nh_ifp, m, (struct sockaddr *)&dst,
+	if (V_nat64out->output(nh->nh_ifp, m, (struct sockaddr *)&dst,
 	    &cfg->stats, logdata) == 0)
 		NAT64STAT_INC(&cfg->stats, opcnt64);
 	return (NAT64RETURN);

@@ -107,7 +107,7 @@ SYSCTL_DECL(_p1003_1b);
 static MALLOC_DEFINE(M_LIO, "lio", "listio aio control block list");
 static MALLOC_DEFINE(M_AIOS, "aios", "aio_suspend aio control block list");
 
-static SYSCTL_NODE(_vfs, OID_AUTO, aio, CTLFLAG_RW, 0,
+static SYSCTL_NODE(_vfs, OID_AUTO, aio, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
     "Async IO management");
 
 static int enable_aio_unsafe = 0;
@@ -733,7 +733,7 @@ aio_fsync_vnode(struct thread *td, struct vnode *vp)
 	}
 	error = VOP_FSYNC(vp, MNT_WAIT, td);
 
-	VOP_UNLOCK(vp, 0);
+	VOP_UNLOCK(vp);
 	vn_finished_write(mp);
 drop:
 	return (error);

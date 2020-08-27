@@ -224,7 +224,8 @@ g_part_vtoc8_create(struct g_part_table *basetable, struct g_part_parms *gpp)
 	ncyls = pcyls - acyls;
 	msize = ncyls * table->secpercyl;
 
-	sprintf(table->vtoc.ascii, "FreeBSD%lldM cyl %u alt %u hd %u sec %u",
+	snprintf(table->vtoc.ascii, sizeof(table->vtoc.ascii),
+	    "FreeBSD%lldM cyl %u alt %u hd %u sec %u",
 	    (long long)(msize / 2048), ncyls, acyls, basetable->gpt_heads,
 	    basetable->gpt_sectors);
 	be32enc(&table->vtoc.version, VTOC_VERSION);
@@ -338,7 +339,8 @@ vtoc8_set_rawsize(struct g_part_table *basetable, struct g_provider *pp)
 	basetable->gpt_last = msize - 1;
 
 	bzero(table->vtoc.ascii, sizeof(table->vtoc.ascii));
-	sprintf(table->vtoc.ascii, "FreeBSD%lldM cyl %u alt %u hd %u sec %u",
+	snprintf(table->vtoc.ascii, sizeof(table->vtoc.ascii),
+	    "FreeBSD%lldM cyl %u alt %u hd %u sec %u",
 	    (long long)(msize / 2048), ncyls, acyls, basetable->gpt_heads,
 	    basetable->gpt_sectors);
 	be16enc(&table->vtoc.physcyls, pcyls);
@@ -373,7 +375,7 @@ g_part_vtoc8_resize(struct g_part_table *basetable,
 		return (EINVAL);
 	/* XXX: prevent unexpected shrinking. */
 	pp = entry->gpe_pp;
-	if ((g_debugflags & 0x10) == 0 && size < gpp->gpp_size &&
+	if ((g_debugflags & G_F_FOOTSHOOTING) == 0 && size < gpp->gpp_size &&
 	    pp->mediasize / pp->sectorsize > size)
 		return (EBUSY);
 	entry->gpe_end = entry->gpe_start + size - 1;

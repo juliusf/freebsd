@@ -37,7 +37,6 @@ __FBSDID("$FreeBSD$");
 #include "opt_inet.h"
 #include "opt_inet6.h"
 #include "opt_ipsec.h"
-#include "opt_mpath.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -63,9 +62,6 @@ __FBSDID("$FreeBSD$");
 #include <net/if_dl.h>
 #include <net/if_var.h>
 #include <net/route.h>
-#ifdef RADIX_MPATH
-#include <net/radix_mpath.h>
-#endif
 #include <net/vnet.h>
 
 #include <netinet/in.h>
@@ -148,10 +144,12 @@ nd6_ns_input(struct mbuf *m, int off, int icmp6len)
 		goto bads;
 	}
 
-	m = m_pullup(m, off + icmp6len);
-	if (m == NULL) {
-		IP6STAT_INC(ip6s_exthdrtoolong);
-		return;
+	if (m->m_len < off + icmp6len) {
+		m = m_pullup(m, off + icmp6len);
+		if (m == NULL) {
+			IP6STAT_INC(ip6s_exthdrtoolong);
+			return;
+		}
 	}
 	ip6 = mtod(m, struct ip6_hdr *);
 	nd_ns = (struct nd_neighbor_solicit *)((caddr_t)ip6 + off);
@@ -652,10 +650,12 @@ nd6_na_input(struct mbuf *m, int off, int icmp6len)
 		goto bad;
 	}
 
-	m = m_pullup(m, off + icmp6len);
-	if (m == NULL) {
-		IP6STAT_INC(ip6s_exthdrtoolong);
-		return;
+	if (m->m_len < off + icmp6len) {
+		m = m_pullup(m, off + icmp6len);
+		if (m == NULL) {
+			IP6STAT_INC(ip6s_exthdrtoolong);
+			return;
+		}
 	}
 	ip6 = mtod(m, struct ip6_hdr *);
 	nd_na = (struct nd_neighbor_advert *)((caddr_t)ip6 + off);
@@ -749,6 +749,12 @@ nd6_na_input(struct mbuf *m, int off, int icmp6len)
 	if (ln == NULL) {
 		goto freeit;
 	}
+
+	/*
+	 * Do not try to override static entry.
+	 */
+	if (ln->la_flags & LLE_STATIC)
+		goto freeit;
 
 	if (ln->ln_state == ND6_LLINFO_INCOMPLETE) {
 		/*

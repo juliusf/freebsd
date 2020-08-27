@@ -87,7 +87,8 @@
 #ifdef USB_DEBUG
 static int usb_fifo_debug = 0;
 
-static SYSCTL_NODE(_hw_usb, OID_AUTO, dev, CTLFLAG_RW, 0, "USB device");
+static SYSCTL_NODE(_hw_usb, OID_AUTO, dev, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "USB device");
 SYSCTL_INT(_hw_usb_dev, OID_AUTO, debug, CTLFLAG_RWTUN,
     &usb_fifo_debug, 0, "Debug Level");
 #endif
@@ -385,13 +386,11 @@ usb_fifo_alloc(struct mtx *mtx)
 	struct usb_fifo *f;
 
 	f = malloc(sizeof(*f), M_USBDEV, M_WAITOK | M_ZERO);
-	if (f != NULL) {
-		cv_init(&f->cv_io, "FIFO-IO");
-		cv_init(&f->cv_drain, "FIFO-DRAIN");
-		f->priv_mtx = mtx;
-		f->refcount = 1;
-		knlist_init_mtx(&f->selinfo.si_note, mtx);
-	}
+	cv_init(&f->cv_io, "FIFO-IO");
+	cv_init(&f->cv_drain, "FIFO-DRAIN");
+	f->priv_mtx = mtx;
+	f->refcount = 1;
+	knlist_init_mtx(&f->selinfo.si_note, mtx);
 	return (f);
 }
 
@@ -2308,9 +2307,6 @@ usb_alloc_symlink(const char *target)
 	struct usb_symlink *ps;
 
 	ps = malloc(sizeof(*ps), M_USBDEV, M_WAITOK);
-	if (ps == NULL) {
-		return (ps);
-	}
 	/* XXX no longer needed */
 	strlcpy(ps->src_path, target, sizeof(ps->src_path));
 	ps->src_len = strlen(ps->src_path);

@@ -1,9 +1,5 @@
 # $FreeBSD$
 
-LIBXODIR=       ${STAGEDIR}${PREFIX}/usr/lib/libxo/encoder
-SHLIBDIR?=      ${LIBXODIR}
-LIBDIR?=        ${LIBXODIR}
-
 .include <src.opts.mk>
 
 PACKAGE=	runtime
@@ -12,19 +8,17 @@ LIBXOSRC=	${SRCTOP}/contrib/libxo
 
 .PATH:	${LIBXOSRC}/encoder/csv
 
-LIB=	enc_csv
-SHLIB_MAJOR=0
+SHLIBDIR=	${LIBDIR}/libxo/encoder
+SHLIB_NAME=	csv.enc
 
 SRCS=	enc_csv.c
 
 CFLAGS+=-I${LIBXOSRC}/libxo -I${.CURDIR}
-CFLAGS+=-DXO_ENCODERDIR=\"/usr/lib/libxo/encoder\"
+CFLAGS+=-DXO_ENCODERDIR=\"${LIBDIR}/libxo/encoder\"
 
 LIBADD=	util xo
-LDFLAGS += -L${.OBJDIR}/../../wildebeast
+LDFLAGS += -L${.OBJDIR:H:H}/libxo
 
 WARNS?= 5
-
-SYMLINKS+=      ${SHLIB_NAME} ${LIBXODIR}/csv.enc
 
 .include <bsd.lib.mk>

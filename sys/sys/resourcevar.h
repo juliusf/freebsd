@@ -109,9 +109,6 @@ struct uidinfo {
 #endif
 };
 
-#define	UIDINFO_VMSIZE_LOCK(ui)		mtx_lock(&((ui)->ui_vmsize_mtx))
-#define	UIDINFO_VMSIZE_UNLOCK(ui)	mtx_unlock(&((ui)->ui_vmsize_mtx))
-
 struct proc;
 struct rusage_ext;
 struct thread;
@@ -162,6 +159,7 @@ void	 rufetchcalc(struct proc *p, struct rusage *ru, struct timeval *up,
 	    struct timeval *sp);
 void	 rufetchtd(struct thread *td, struct rusage *ru);
 void	 ruxagg(struct proc *p, struct thread *td);
+void	 ruxagg_locked(struct proc *p, struct thread *td);
 struct uidinfo
 	*uifind(uid_t uid);
 void	 uifree(struct uidinfo *uip);

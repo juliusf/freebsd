@@ -24,7 +24,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd November 13, 2019
+.Dd July 5, 2020
 .Dt LINUX 4
 .Os
 .Sh NAME
@@ -95,6 +95,18 @@ variables and
 .Xr loader 8
 tunables:
 .Bl -tag -width indent
+.It Va compat.linux.debug
+Enable debugging messages.
+Set to 0 to silence them.
+Defaults to 1.
+.It Va compat.linux.default_openfiles
+Default soft openfiles resource limit for Linux applications.
+Set to -1 to disable the limit.
+Defaults to 1024.
+.It Va compat.linux.emul_path
+Path to the Linux run-time environment.
+Defaults to
+.Pa /compat/linux .
 .It Va compat.linux.osname
 Linux kernel operating system name.
 .It Va compat.linux.osrelease
@@ -105,12 +117,25 @@ Recent versions of GNU libc are known to use different syscalls depending
 on the value of this sysctl.
 .It Va compat.linux.oss_version
 Linux Open Sound System version.
+.It Va compat.linux.preserve_vstatus
+When set to 1, it prevents Linux applications from resetting the
+.Xr termios 4
+VSTATUS setting.
+From a user perspective, this makes
+.Va SIGINFO
+work for Linux executables.
+Defaults to 0.
 .Sh FILES
 .Bl -tag -width /compat/linux/dev/shm -compact
 .It Pa /compat/linux
 minimal Linux run-time environment
+.It Pa /compat/linux/dev
+device file system, see
+.Xr devfs 5
 .It Pa /compat/linux/dev/fd
-file-descriptor file system, see
+file descriptor file system mounted with the
+.Cm linrdlnk
+option, see
 .Xr fdescfs 5
 .It Pa /compat/linux/dev/shm
 in-memory file system, see

@@ -68,10 +68,8 @@ static char *ig4iic_ids[] = {
 static int
 ig4iic_acpi_probe(device_t dev)
 {
-	ig4iic_softc_t *sc;
 	int rv;
 
-	sc = device_get_softc(dev);
 	if (acpi_disabled("ig4iic"))
 		return (ENXIO);
 	rv = ACPI_ID_PROBE(device_get_parent(dev), dev, ig4iic_ids, NULL);
@@ -177,8 +175,6 @@ static device_method_t ig4iic_acpi_methods[] = {
 	DEVMETHOD(bus_activate_resource, bus_generic_activate_resource),
 	DEVMETHOD(bus_deactivate_resource, bus_generic_deactivate_resource),
 	DEVMETHOD(bus_adjust_resource, bus_generic_adjust_resource),
-	DEVMETHOD(bus_set_resource, bus_generic_rl_set_resource),
-	DEVMETHOD(bus_get_resource, bus_generic_rl_get_resource),
 
 	/* iicbus interface */
 	DEVMETHOD(iicbus_transfer, ig4iic_transfer),
@@ -194,5 +190,6 @@ static driver_t ig4iic_acpi_driver = {
 	sizeof(struct ig4iic_softc),
 };
 
-DRIVER_MODULE(ig4iic, acpi, ig4iic_acpi_driver, ig4iic_devclass, 0, 0);
+DRIVER_MODULE_ORDERED(ig4iic, acpi, ig4iic_acpi_driver, ig4iic_devclass, 0, 0,
+    SI_ORDER_ANY);
 MODULE_DEPEND(ig4iic, acpi, 1, 1, 1);

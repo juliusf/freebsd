@@ -68,6 +68,7 @@ __FBSDID("$FreeBSD$");
 
 #include <net/if.h>
 #include <net/route.h>
+#include <net/route/route_ctl.h>
 #include <netinet/in.h>
 
 #include <fs/nfs/nfsport.h>
@@ -152,7 +153,6 @@ MODULE_VERSION(nfs, 1);
 MODULE_DEPEND(nfs, nfscommon, 1, 1, 1);
 MODULE_DEPEND(nfs, krpc, 1, 1, 1);
 MODULE_DEPEND(nfs, nfssvc, 1, 1, 1);
-MODULE_DEPEND(nfs, nfslock, 1, 1, 1);
 
 /*
  * This structure is now defined in sys/nfs/nfs_diskless.c so that it
@@ -466,18 +466,27 @@ nfs_mountroot(struct mount *mp)
 	if (nd->mygateway.sin_len != 0 &&
 	    nd->mygateway.sin_addr.s_addr != 0) {
 		struct sockaddr_in mask, sin;
+		struct epoch_tracker et;
+		struct rt_addrinfo info;
+		struct rib_cmd_info rc;
 
 		bzero((caddr_t)&mask, sizeof(mask));
 		sin = mask;
 		sin.sin_family = AF_INET;
 		sin.sin_len = sizeof(sin);
                 /* XXX MRT use table 0 for this sort of thing */
+		NET_EPOCH_ENTER(et);
 		CURVNET_SET(TD_TO_VNET(td));
-		error = rtrequest_fib(RTM_ADD, (struct sockaddr *)&sin,
-		    (struct sockaddr *)&nd->mygateway,
-		    (struct sockaddr *)&mask,
-		    RTF_UP | RTF_GATEWAY, NULL, RT_DEFAULT_FIB);
+
+		bzero((caddr_t)&info, sizeof(info));
+		info.rti_flags = RTF_UP | RTF_GATEWAY;
+		info.rti_info[RTAX_DST] = (struct sockaddr *)&sin;
+		info.rti_info[RTAX_GATEWAY] = (struct sockaddr *)&nd->mygateway;
+		info.rti_info[RTAX_NETMASK] = (struct sockaddr *)&mask;
+
+		error = rib_action(RT_DEFAULT_FIB, RTM_ADD, &info, &rc);
 		CURVNET_RESTORE();
+		NET_EPOCH_EXIT(et);
 		if (error)
 			panic("nfs_mountroot: RTM_ADD: %d", error);
 	}
@@ -1151,7 +1160,7 @@ nfs_mount(struct mount *mp)
 	if (vfs_getopt(mp->mnt_optnew, "minorversion", (void **)&opt, NULL) ==
 	    0) {
 		ret = sscanf(opt, "%d", &minvers);
-		if (ret != 1 || minvers < 0 || minvers > 1 ||
+		if (ret != 1 || minvers < 0 || minvers > 2 ||
 		    (args.flags & NFSMNT_NFSV4) == 0) {
 			vfs_mount_error(mp, "illegal minorversion: %s", opt);
 			error = EINVAL;
@@ -1544,10 +1553,8 @@ mountnfs(struct nfs_args *argp, struct mount *mp, struct sockaddr *nam,
 			if (error)
 				(void) nfs_catnap(PZERO, error, "nfsgetdirp");
 		} while (error && --trycnt > 0);
-		if (error) {
-			error = nfscl_maperr(td, error, (uid_t)0, (gid_t)0);
+		if (error)
 			goto bad;
-		}
 	}
 
 	/*
@@ -1626,7 +1633,7 @@ mountnfs(struct nfs_args *argp, struct mount *mp, struct sockaddr *nam,
 		/*
 		 * Lose the lock but keep the ref.
 		 */
-		NFSVOPUNLOCK(*vpp, 0);
+		NFSVOPUNLOCK(*vpp);
 		vfs_cache_root_set(mp, *vpp);
 		return (0);
 	}
@@ -1828,7 +1835,7 @@ loop:
 		error = VOP_FSYNC(vp, waitfor, td);
 		if (error)
 			allerror = error;
-		NFSVOPUNLOCK(vp, 0);
+		NFSVOPUNLOCK(vp);
 		vrele(vp);
 	}
 	return (allerror);

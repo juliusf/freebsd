@@ -275,13 +275,6 @@ static const struct pci_quirk pci_quirks[] = {
 	{ 0x74501022, PCI_QUIRK_DISABLE_MSI,	0,	0 },
 
 	/*
-	 * MSI-X allocation doesn't work properly for devices passed through
-	 * by VMware up to at least ESXi 5.1.
-	 */
-	{ 0x079015ad, PCI_QUIRK_DISABLE_MSIX,	0,	0 }, /* PCI/PCI-X */
-	{ 0x07a015ad, PCI_QUIRK_DISABLE_MSIX,	0,	0 }, /* PCIe */
-
-	/*
 	 * Some virtualization environments emulate an older chipset
 	 * but support MSI just fine.  QEMU uses the Intel 82440.
 	 */
@@ -339,7 +332,8 @@ uint32_t pci_numdevs = 0;
 static int pcie_chipset, pcix_chipset;
 
 /* sysctl vars */
-SYSCTL_NODE(_hw, OID_AUTO, pci, CTLFLAG_RD, 0, "PCI bus tuning parameters");
+SYSCTL_NODE(_hw, OID_AUTO, pci, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
+    "PCI bus tuning parameters");
 
 static int pci_enable_io_modes = 1;
 SYSCTL_INT(_hw_pci, OID_AUTO, enable_io_modes, CTLFLAG_RWTUN,
@@ -414,6 +408,10 @@ static int pci_enable_ari = 1;
 SYSCTL_INT(_hw_pci, OID_AUTO, enable_ari, CTLFLAG_RDTUN, &pci_enable_ari,
     0, "Enable support for PCIe Alternative RID Interpretation");
 
+int pci_enable_aspm;
+SYSCTL_INT(_hw_pci, OID_AUTO, enable_aspm, CTLFLAG_RDTUN, &pci_enable_aspm,
+    0, "Enable support for PCIe Active State Power Management");
+
 static int pci_clear_aer_on_attach = 0;
 SYSCTL_INT(_hw_pci, OID_AUTO, clear_aer_on_attach, CTLFLAG_RWTUN,
     &pci_clear_aer_on_attach, 0,
@@ -445,18 +443,18 @@ pci_find_bsf(uint8_t bus, uint8_t slot, uint8_t func)
 device_t
 pci_find_dbsf(uint32_t domain, uint8_t bus, uint8_t slot, uint8_t func)
 {
-	struct pci_devinfo *dinfo;
+	struct pci_devinfo *dinfo = NULL;
 
 	STAILQ_FOREACH(dinfo, &pci_devq, pci_links) {
 		if ((dinfo->cfg.domain == domain) &&
 		    (dinfo->cfg.bus == bus) &&
 		    (dinfo->cfg.slot == slot) &&
 		    (dinfo->cfg.func == func)) {
-			return (dinfo->cfg.dev);
+			break;
 		}
 	}
 
-	return (NULL);
+	return (dinfo != NULL ? dinfo->cfg.dev : NULL);
 }
 
 /* Find a device_t by vendor/device ID */
@@ -1108,16 +1106,16 @@ pci_read_vpd(device_t pcib, pcicfgregs *cfg)
 					break;
 				}
 				remain |= byte2 << 8;
-				if (remain > (0x7f*4 - vrs.off)) {
-					state = -1;
-					pci_printf(cfg,
-					    "invalid VPD data, remain %#x\n",
-					    remain);
-				}
 				name = byte & 0x7f;
 			} else {
 				remain = byte & 0x7;
 				name = (byte >> 3) & 0xf;
+			}
+			if (vrs.off + remain - vrs.bytesinval > 0x8000) {
+				pci_printf(cfg,
+				    "VPD data overflow, remain %#x\n", remain);
+				state = -1;
+				break;
 			}
 			switch (name) {
 			case 0x2:	/* String */
@@ -5688,7 +5686,7 @@ pci_get_resource_list (device_t dev, device_t child)
 }
 
 #ifdef ACPI_DMAR
-bus_dma_tag_t dmar_get_dma_tag(device_t dev, device_t child);
+bus_dma_tag_t acpi_iommu_get_dma_tag(device_t dev, device_t child);
 bus_dma_tag_t
 pci_get_dma_tag(device_t bus, device_t dev)
 {
@@ -5696,8 +5694,8 @@ pci_get_dma_tag(device_t bus, device_t dev)
 	struct pci_softc *sc;
 
 	if (device_get_parent(dev) == bus) {
-		/* try dmar and return if it works */
-		tag = dmar_get_dma_tag(bus, dev);
+		/* try iommu and return if it works */
+		tag = acpi_iommu_get_dma_tag(bus, dev);
 	} else
 		tag = NULL;
 	if (tag == NULL) {
@@ -5938,7 +5936,6 @@ pci_cfg_restore(device_t dev, struct pci_devinfo *dinfo)
 	 */
 	if (pci_get_powerstate(dev) != PCI_POWERSTATE_D0)
 		pci_set_powerstate(dev, PCI_POWERSTATE_D0);
-	pci_write_config(dev, PCIR_COMMAND, dinfo->cfg.cmdreg, 2);
 	pci_write_config(dev, PCIR_INTLINE, dinfo->cfg.intline, 1);
 	pci_write_config(dev, PCIR_INTPIN, dinfo->cfg.intpin, 1);
 	pci_write_config(dev, PCIR_CACHELNSZ, dinfo->cfg.cachelnsz, 1);
@@ -5976,6 +5973,9 @@ pci_cfg_restore(device_t dev, struct pci_devinfo *dinfo)
 		break;
 	}
 	pci_restore_bars(dev);
+
+	if ((dinfo->cfg.hdrtype & PCIM_HDRTYPE) != PCIM_HDRTYPE_BRIDGE)
+		pci_write_config(dev, PCIR_COMMAND, dinfo->cfg.cmdreg, 2);
 
 	/*
 	 * Restore extended capabilities for PCI-Express and PCI-X
@@ -6303,6 +6303,67 @@ pcie_get_max_completion_timeout(device_t dev)
 		return (64 * 1000 * 1000);
 	default:
 		return (50 * 1000);
+	}
+}
+
+void
+pcie_apei_error(device_t dev, int sev, uint8_t *aerp)
+{
+	struct pci_devinfo *dinfo = device_get_ivars(dev);
+	const char *s;
+	int aer;
+	uint32_t r, r1;
+	uint16_t rs;
+
+	if (sev == PCIEM_STA_CORRECTABLE_ERROR)
+		s = "Correctable";
+	else if (sev == PCIEM_STA_NON_FATAL_ERROR)
+		s = "Uncorrectable (Non-Fatal)";
+	else
+		s = "Uncorrectable (Fatal)";
+	device_printf(dev, "%s PCIe error reported by APEI\n", s);
+	if (aerp) {
+		if (sev == PCIEM_STA_CORRECTABLE_ERROR) {
+			r = le32dec(aerp + PCIR_AER_COR_STATUS);
+			r1 = le32dec(aerp + PCIR_AER_COR_MASK);
+		} else {
+			r = le32dec(aerp + PCIR_AER_UC_STATUS);
+			r1 = le32dec(aerp + PCIR_AER_UC_MASK);
+		}
+		device_printf(dev, "status 0x%08x mask 0x%08x", r, r1);
+		if (sev != PCIEM_STA_CORRECTABLE_ERROR) {
+			r = le32dec(aerp + PCIR_AER_UC_SEVERITY);
+			rs = le16dec(aerp + PCIR_AER_CAP_CONTROL);
+			printf(" severity 0x%08x first %d\n",
+			    r, rs & 0x1f);
+		} else
+			printf("\n");
+	}
+
+	/* As kind of recovery just report and clear the error statuses. */
+	if (pci_find_extcap(dev, PCIZ_AER, &aer) == 0) {
+		r = pci_read_config(dev, aer + PCIR_AER_UC_STATUS, 4);
+		if (r != 0) {
+			pci_write_config(dev, aer + PCIR_AER_UC_STATUS, r, 4);
+			device_printf(dev, "Clearing UC AER errors 0x%08x\n", r);
+		}
+
+		r = pci_read_config(dev, aer + PCIR_AER_COR_STATUS, 4);
+		if (r != 0) {
+			pci_write_config(dev, aer + PCIR_AER_COR_STATUS, r, 4);
+			device_printf(dev, "Clearing COR AER errors 0x%08x\n", r);
+		}
+	}
+	if (dinfo->cfg.pcie.pcie_location != 0) {
+		rs = pci_read_config(dev, dinfo->cfg.pcie.pcie_location +
+		    PCIER_DEVICE_STA, 2);
+		if ((rs & (PCIEM_STA_CORRECTABLE_ERROR |
+		    PCIEM_STA_NON_FATAL_ERROR | PCIEM_STA_FATAL_ERROR |
+		    PCIEM_STA_UNSUPPORTED_REQ)) != 0) {
+			pci_write_config(dev, dinfo->cfg.pcie.pcie_location +
+			    PCIER_DEVICE_STA, rs, 2);
+			device_printf(dev, "Clearing PCIe errors 0x%04x\n", rs);
+		}
 	}
 }
 

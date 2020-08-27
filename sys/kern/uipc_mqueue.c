@@ -199,7 +199,7 @@ struct mqueue_msg {
 	/* following real data... */
 };
 
-static SYSCTL_NODE(_kern, OID_AUTO, mqueue, CTLFLAG_RW, 0,
+static SYSCTL_NODE(_kern, OID_AUTO, mqueue, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
 	"POSIX real time message queue");
 
 static int	default_maxmsg  = 10;
@@ -725,7 +725,7 @@ do_recycle(void *context, int pending __unused)
 
 	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
 	vrecycle(vp);
-	VOP_UNLOCK(vp, 0);
+	VOP_UNLOCK(vp);
 	vdrop(vp);
 }
 
@@ -893,7 +893,7 @@ mqfs_lookupx(struct vop_cachedlookup_args *ap)
 			return (EIO);
 		if ((flags & ISLASTCN) && nameiop != LOOKUP)
 			return (EINVAL);
-		VOP_UNLOCK(dvp, 0);
+		VOP_UNLOCK(dvp);
 		KASSERT(pd->mn_parent, ("non-root directory has no parent"));
 		pn = pd->mn_parent;
 		error = mqfs_allocv(dvp->v_mount, vpp, pn);
@@ -1178,8 +1178,8 @@ mqfs_access(struct vop_access_args *ap)
 	error = VOP_GETATTR(vp, &vattr, ap->a_cred);
 	if (error)
 		return (error);
-	error = vaccess(vp->v_type, vattr.va_mode, vattr.va_uid,
-	    vattr.va_gid, ap->a_accmode, ap->a_cred, NULL);
+	error = vaccess(vp->v_type, vattr.va_mode, vattr.va_uid, vattr.va_gid,
+	    ap->a_accmode, ap->a_cred);
 	return (error);
 }
 
@@ -2088,7 +2088,7 @@ kern_kmq_open(struct thread *td, const char *upath, int flags, mode_t mode,
 			if (flags & FWRITE)
 				accmode |= VWRITE;
 			error = vaccess(VREG, pn->mn_mode, pn->mn_uid,
-				    pn->mn_gid, accmode, td->td_ucred, NULL);
+			    pn->mn_gid, accmode, td->td_ucred);
 		}
 	}
 
@@ -2566,7 +2566,7 @@ mqf_chmod(struct file *fp, mode_t mode, struct ucred *active_cred,
 	pn = fp->f_data;
 	sx_xlock(&mqfs_data.mi_lock);
 	error = vaccess(VREG, pn->mn_mode, pn->mn_uid, pn->mn_gid, VADMIN,
-	    active_cred, NULL);
+	    active_cred);
 	if (error != 0)
 		goto out;
 	pn->mn_mode = mode & ACCESSPERMS;
@@ -2669,6 +2669,7 @@ static struct fileops mqueueops = {
 	.fo_chown		= mqf_chown,
 	.fo_sendfile		= invfo_sendfile,
 	.fo_fill_kinfo		= mqf_fill_kinfo,
+	.fo_flags		= DFLAG_PASSABLE,
 };
 
 static struct vop_vector mqfs_vnodeops = {
@@ -2690,6 +2691,7 @@ static struct vop_vector mqfs_vnodeops = {
 	.vop_mkdir		= VOP_EOPNOTSUPP,
 	.vop_rmdir		= VOP_EOPNOTSUPP
 };
+VFS_VOP_VECTOR_REGISTER(mqfs_vnodeops);
 
 static struct vfsops mqfs_vfsops = {
 	.vfs_init 		= mqfs_init,

@@ -45,7 +45,7 @@ options 	TCP_OFFLOAD		# TCP offload
 options 	TCP_BLACKBOX		# Enhanced TCP event logging
 options 	TCP_HHOOK		# hhook(9) framework for TCP
 options 	TCP_RFC7413		# TCP Fast Open
-options 	SCTP			#Stream Control Transmission Protocol
+options 	SCTP_SUPPORT		# Allow kldload of SCTP
 options 	FFS			#Berkeley Fast Filesystem
 options 	SOFTUPDATES		#Enable FFS soft updates support
 options 	UFS_ACL			#Support for access control lists
@@ -62,6 +62,7 @@ options 	MSDOSFS			#MSDOS Filesystem
 options 	CD9660			#ISO 9660 Filesystem
 options 	PROCFS			#Process filesystem (requires PSEUDOFS)
 options 	PSEUDOFS		#Pseudo-filesystem framework
+options 	TMPFS			#Efficient memory filesystem
 options 	GEOM_PART_APM		#Apple Partition Maps.
 options 	GEOM_PART_GPT		#GUID Partition Tables.
 options 	GEOM_LABEL		#Provides labelization
@@ -136,6 +137,7 @@ options		NVME_USE_NVD=0	# prefer the cam(4) based nda(4) driver
 device		nvd		# expose NVMe namespaces as disks, depends on nvme
 
 # SCSI Controllers
+device		aacraid		# Adaptec by PMC RAID
 device		ahc		# AHA2940 and onboard AIC7xxx devices
 options 	AHC_ALLOW_MEMIO	# Attempt to use memory mapped I/O
 device		isp		# Qlogic family
@@ -167,6 +169,7 @@ device		iflib
 # Ethernet hardware
 device		em		# Intel PRO/1000 Gigabit Ethernet Family
 device		ix		# Intel PRO/10GbE PCIE PF Ethernet Family
+device		ixl		# Intel 700 Series Physical Function
 device		ixv		# Intel PRO/10GbE PCIE VF Ethernet Family
 device		glc		# Sony Playstation 3 Ethernet
 device		llan		# IBM pSeries Virtual Ethernet
@@ -256,3 +259,12 @@ device		netmap		# netmap(4) support
 options 	EVDEV_SUPPORT		# evdev support in legacy drivers
 device		evdev			# input event device support
 device		uinput			# install /dev/uinput cdev
+
+# VirtIO support
+device          virtio                  # Generic VirtIO bus (required)
+device          virtio_pci              # VirtIO PCI device
+device          vtnet                   # VirtIO Ethernet device
+device          virtio_blk              # VirtIO Block device
+device          virtio_scsi             # VirtIO SCSI device
+device          virtio_balloon          # VirtIO Memory Balloon device
+

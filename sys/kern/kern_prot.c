@@ -65,7 +65,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/sysent.h>
 #include <sys/sysproto.h>
 #include <sys/jail.h>
-#include <sys/pioctl.h>
 #include <sys/racct.h>
 #include <sys/rctl.h>
 #include <sys/resourcevar.h>
@@ -84,7 +83,8 @@ FEATURE(regression,
 
 static MALLOC_DEFINE(M_CRED, "cred", "credentials");
 
-SYSCTL_NODE(_security, OID_AUTO, bsd, CTLFLAG_RW, 0, "BSD security policy");
+SYSCTL_NODE(_security, OID_AUTO, bsd, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "BSD security policy");
 
 static void crsetgroups_locked(struct ucred *cr, int ngrp,
     gid_t *groups);
@@ -190,14 +190,21 @@ struct getsid_args {
 int
 sys_getsid(struct thread *td, struct getsid_args *uap)
 {
+
+	return (kern_getsid(td, uap->pid));
+}
+
+int
+kern_getsid(struct thread *td, pid_t pid)
+{
 	struct proc *p;
 	int error;
 
-	if (uap->pid == 0) {
+	if (pid == 0) {
 		p = td->td_proc;
 		PROC_LOCK(p);
 	} else {
-		p = pfind(uap->pid);
+		p = pfind(pid);
 		if (p == NULL)
 			return (ESRCH);
 		error = p_cansee(td, p);
@@ -1671,8 +1678,8 @@ sysctl_unprivileged_proc_debug(SYSCTL_HANDLER_ARGS)
  * systems.
  */
 SYSCTL_PROC(_security_bsd, OID_AUTO, unprivileged_proc_debug,
-    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_PRISON | CTLFLAG_SECURE, 0, 0,
-    sysctl_unprivileged_proc_debug, "I",
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_PRISON | CTLFLAG_SECURE |
+    CTLFLAG_MPSAFE, 0, 0, sysctl_unprivileged_proc_debug, "I",
     "Unprivileged processes may use process debugging facilities");
 
 /*-
@@ -1834,6 +1841,100 @@ p_canwait(struct thread *td, struct proc *p)
 }
 
 /*
+ * Credential management.
+ *
+ * struct ucred objects are rarely allocated but gain and lose references all
+ * the time (e.g., on struct file alloc/dealloc) turning refcount updates into
+ * a significant source of cache-line ping ponging. Common cases are worked
+ * around by modifying thread-local counter instead if the cred to operate on
+ * matches td_realucred.
+ *
+ * The counter is split into 2 parts:
+ * - cr_users -- total count of all struct proc and struct thread objects
+ *   which have given cred in p_ucred and td_ucred respectively
+ * - cr_ref -- the actual ref count, only valid if cr_users == 0
+ *
+ * If users == 0 then cr_ref behaves similarly to refcount(9), in particular if
+ * the count reaches 0 the object is freeable.
+ * If users > 0 and curthread->td_realucred == cred, then updates are performed
+ * against td_ucredref.
+ * In other cases updates are performed against cr_ref.
+ *
+ * Changing td_realucred into something else decrements cr_users and transfers
+ * accumulated updates.
+ */
+struct ucred *
+crcowget(struct ucred *cr)
+{
+
+	mtx_lock(&cr->cr_mtx);
+	KASSERT(cr->cr_users > 0, ("%s: users %d not > 0 on cred %p",
+	    __func__, cr->cr_users, cr));
+	cr->cr_users++;
+	cr->cr_ref++;
+	mtx_unlock(&cr->cr_mtx);
+	return (cr);
+}
+
+static struct ucred *
+crunuse(struct thread *td)
+{
+	struct ucred *cr, *crold;
+
+	MPASS(td->td_realucred == td->td_ucred);
+	cr = td->td_realucred;
+	mtx_lock(&cr->cr_mtx);
+	cr->cr_ref += td->td_ucredref;
+	td->td_ucredref = 0;
+	KASSERT(cr->cr_users > 0, ("%s: users %d not > 0 on cred %p",
+	    __func__, cr->cr_users, cr));
+	cr->cr_users--;
+	if (cr->cr_users == 0) {
+		KASSERT(cr->cr_ref > 0, ("%s: ref %d not > 0 on cred %p",
+		    __func__, cr->cr_ref, cr));
+		crold = cr;
+	} else {
+		cr->cr_ref--;
+		crold = NULL;
+	}
+	mtx_unlock(&cr->cr_mtx);
+	td->td_realucred = NULL;
+	return (crold);
+}
+
+void
+crcowfree(struct thread *td)
+{
+	struct ucred *cr;
+
+	cr = crunuse(td);
+	if (cr != NULL)
+		crfree(cr);
+}
+
+struct ucred *
+crcowsync(void)
+{
+	struct thread *td;
+	struct proc *p;
+	struct ucred *crnew, *crold;
+
+	td = curthread;
+	p = td->td_proc;
+	PROC_LOCK_ASSERT(p, MA_OWNED);
+
+	MPASS(td->td_realucred == td->td_ucred);
+	if (td->td_realucred == p->p_ucred)
+		return (NULL);
+
+	crnew = crcowget(p->p_ucred);
+	crold = crunuse(td);
+	td->td_realucred = crnew;
+	td->td_ucred = td->td_realucred;
+	return (crold);
+}
+
+/*
  * Allocate a zeroed cred structure.
  */
 struct ucred *
@@ -1842,7 +1943,8 @@ crget(void)
 	struct ucred *cr;
 
 	cr = malloc(sizeof(*cr), M_CRED, M_WAITOK | M_ZERO);
-	refcount_init(&cr->cr_ref, 1);
+	mtx_init(&cr->cr_mtx, "cred", NULL, MTX_DEF);
+	cr->cr_ref = 1;
 #ifdef AUDIT
 	audit_cred_init(cr);
 #endif
@@ -1861,8 +1963,18 @@ crget(void)
 struct ucred *
 crhold(struct ucred *cr)
 {
+	struct thread *td;
 
-	refcount_acquire(&cr->cr_ref);
+	td = curthread;
+	if (__predict_true(td->td_realucred == cr)) {
+		KASSERT(cr->cr_users > 0, ("%s: users %d not > 0 on cred %p",
+		    __func__, cr->cr_users, cr));
+		td->td_ucredref++;
+		return (cr);
+	}
+	mtx_lock(&cr->cr_mtx);
+	cr->cr_ref++;
+	mtx_unlock(&cr->cr_mtx);
 	return (cr);
 }
 
@@ -1872,36 +1984,51 @@ crhold(struct ucred *cr)
 void
 crfree(struct ucred *cr)
 {
+	struct thread *td;
 
-	KASSERT(cr->cr_ref > 0, ("bad ucred refcount: %d", cr->cr_ref));
-	KASSERT(cr->cr_ref != 0xdeadc0de, ("dangling reference to ucred"));
-	if (refcount_release(&cr->cr_ref)) {
-		/*
-		 * Some callers of crget(), such as nfs_statfs(),
-		 * allocate a temporary credential, but don't
-		 * allocate a uidinfo structure.
-		 */
-		if (cr->cr_uidinfo != NULL)
-			uifree(cr->cr_uidinfo);
-		if (cr->cr_ruidinfo != NULL)
-			uifree(cr->cr_ruidinfo);
-		/*
-		 * Free a prison, if any.
-		 */
-		if (cr->cr_prison != NULL)
-			prison_free(cr->cr_prison);
-		if (cr->cr_loginclass != NULL)
-			loginclass_free(cr->cr_loginclass);
+	td = curthread;
+	if (__predict_true(td->td_realucred == cr)) {
+		KASSERT(cr->cr_users > 0, ("%s: users %d not > 0 on cred %p",
+		    __func__, cr->cr_users, cr));
+		td->td_ucredref--;
+		return;
+	}
+	mtx_lock(&cr->cr_mtx);
+	KASSERT(cr->cr_users >= 0, ("%s: users %d not >= 0 on cred %p",
+	    __func__, cr->cr_users, cr));
+	cr->cr_ref--;
+	if (cr->cr_users > 0) {
+		mtx_unlock(&cr->cr_mtx);
+		return;
+	}
+	KASSERT(cr->cr_ref >= 0, ("%s: ref %d not >= 0 on cred %p",
+	    __func__, cr->cr_ref, cr));
+	if (cr->cr_ref > 0) {
+		mtx_unlock(&cr->cr_mtx);
+		return;
+	}
+	/*
+	 * Some callers of crget(), such as nfs_statfs(), allocate a temporary
+	 * credential, but don't allocate a uidinfo structure.
+	 */
+	if (cr->cr_uidinfo != NULL)
+		uifree(cr->cr_uidinfo);
+	if (cr->cr_ruidinfo != NULL)
+		uifree(cr->cr_ruidinfo);
+	if (cr->cr_prison != NULL)
+		prison_free(cr->cr_prison);
+	if (cr->cr_loginclass != NULL)
+		loginclass_free(cr->cr_loginclass);
 #ifdef AUDIT
-		audit_cred_destroy(cr);
+	audit_cred_destroy(cr);
 #endif
 #ifdef MAC
-		mac_cred_destroy(cr);
+	mac_cred_destroy(cr);
 #endif
-		if (cr->cr_groups != cr->cr_smallgroups)
-			free(cr->cr_groups, M_CRED);
-		free(cr, M_CRED);
-	}
+	mtx_destroy(&cr->cr_mtx);
+	if (cr->cr_groups != cr->cr_smallgroups)
+		free(cr->cr_groups, M_CRED);
+	free(cr, M_CRED);
 }
 
 /*
@@ -1975,7 +2102,7 @@ void
 proc_set_cred_init(struct proc *p, struct ucred *newcred)
 {
 
-	p->p_ucred = newcred;
+	p->p_ucred = crcowget(newcred);
 }
 
 /*
@@ -1988,22 +2115,43 @@ proc_set_cred_init(struct proc *p, struct ucred *newcred)
  * only used when the process is about to be freed, at which point it should
  * not be visible anymore).
  */
-struct ucred *
+void
 proc_set_cred(struct proc *p, struct ucred *newcred)
 {
-	struct ucred *oldcred;
+	struct ucred *cr;
 
-	MPASS(p->p_ucred != NULL);
-	if (newcred == NULL)
-		MPASS(p->p_state == PRS_ZOMBIE);
-	else
-		PROC_LOCK_ASSERT(p, MA_OWNED);
-
-	oldcred = p->p_ucred;
+	cr = p->p_ucred;
+	MPASS(cr != NULL);
+	PROC_LOCK_ASSERT(p, MA_OWNED);
+	KASSERT(newcred->cr_users == 0, ("%s: users %d not 0 on cred %p",
+	    __func__, newcred->cr_users, newcred));
+	mtx_lock(&cr->cr_mtx);
+	KASSERT(cr->cr_users > 0, ("%s: users %d not > 0 on cred %p",
+	    __func__, cr->cr_users, cr));
+	cr->cr_users--;
+	mtx_unlock(&cr->cr_mtx);
 	p->p_ucred = newcred;
-	if (newcred != NULL)
-		PROC_UPDATE_COW(p);
-	return (oldcred);
+	newcred->cr_users = 1;
+	PROC_UPDATE_COW(p);
+}
+
+void
+proc_unset_cred(struct proc *p)
+{
+	struct ucred *cr;
+
+	MPASS(p->p_state == PRS_ZOMBIE || p->p_state == PRS_NEW);
+	cr = p->p_ucred;
+	p->p_ucred = NULL;
+	KASSERT(cr->cr_users > 0, ("%s: users %d not > 0 on cred %p",
+	    __func__, cr->cr_users, cr));
+	mtx_lock(&cr->cr_mtx);
+	cr->cr_users--;
+	if (cr->cr_users == 0)
+		KASSERT(cr->cr_ref > 0, ("%s: ref %d not > 0 on cred %p",
+		    __func__, cr->cr_ref, cr));
+	mtx_unlock(&cr->cr_mtx);
+	crfree(cr);
 }
 
 struct ucred *
@@ -2050,7 +2198,7 @@ crextend(struct ucred *cr, int n)
 	 */
 	if ( n < PAGE_SIZE / sizeof(gid_t) ) {
 		if (cr->cr_agroups == 0)
-			cnt = MINALLOCSIZE / sizeof(gid_t);
+			cnt = MAX(1, MINALLOCSIZE / sizeof(gid_t));
 		else
 			cnt = cr->cr_agroups * 2;
 
@@ -2187,8 +2335,6 @@ setsugid(struct proc *p)
 
 	PROC_LOCK_ASSERT(p, MA_OWNED);
 	p->p_flag |= P_SUGID;
-	if (!(p->p_pfsflags & PF_ISUGID))
-		p->p_stops = 0;
 }
 
 /*-

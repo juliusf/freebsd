@@ -56,8 +56,15 @@
  * Copyright 2013 by Saso Kiselkov. All rights reserved.
  */
 /*
- * Copyright (c) 2013 by Delphix. All rights reserved.
+ * Copyright (c) 2020 by Delphix. All rights reserved.
  */
+
+#include <sys/queue.h>
+#include <sys/list.h>
+#include <bootstrap.h>
+
+#ifndef _ZFSIMPL_H_
+#define	_ZFSIMPL_H_
 
 #define	MAXNAMELEN	256
 
@@ -493,7 +500,7 @@ typedef struct zio_gbh {
 #define	VDEV_RAIDZ_MAXPARITY	3
 
 #define	VDEV_PAD_SIZE		(8 << 10)
-/* 2 padding areas (vl_pad1 and vl_pad2) to skip */
+/* 2 padding areas (vl_pad1 and vl_be) to skip */
 #define	VDEV_SKIP_SIZE		VDEV_PAD_SIZE * 2
 #define	VDEV_PHYS_SIZE		(112 << 10)
 #define	VDEV_UBERBLOCK_RING	(128 << 10)
@@ -519,9 +526,29 @@ typedef struct vdev_phys {
 	zio_eck_t	vp_zbt;
 } vdev_phys_t;
 
+typedef enum vbe_vers {
+ 	/* The bootenv file is stored as ascii text in the envblock */
+ 	VB_RAW = 0,
+
+  	/*
+ 	 * The bootenv file is converted to an nvlist and then packed into the
+ 	 * envblock.
+ 	 */
+ 	VB_NVLIST = 1
+} vbe_vers_t;
+
+typedef struct vdev_boot_envblock {
+ 	uint64_t	vbe_version;
+ 	char		vbe_bootenv[VDEV_PAD_SIZE - sizeof (uint64_t) -
+ 			sizeof (zio_eck_t)];
+ 	zio_eck_t	vbe_zbt;
+} vdev_boot_envblock_t;
+
+CTASSERT(sizeof (vdev_boot_envblock_t) == VDEV_PAD_SIZE);
+
 typedef struct vdev_label {
 	char		vl_pad1[VDEV_PAD_SIZE];			/*  8K  */
-	char		vl_pad2[VDEV_PAD_SIZE];			/*  8K  */
+	vdev_boot_envblock_t	vl_be;				/*  8K  */
 	vdev_phys_t	vl_vdev_phys;				/* 112K	*/
 	char		vl_uberblock[VDEV_UBERBLOCK_RING];	/* 128K	*/
 } vdev_label_t;							/* 256K total */
@@ -760,6 +787,7 @@ typedef enum {
 #define	ZPOOL_CONFIG_IS_LOG		"is_log"
 #define	ZPOOL_CONFIG_TIMESTAMP		"timestamp" /* not stored on disk */
 #define	ZPOOL_CONFIG_FEATURES_FOR_READ	"features_for_read"
+#define	ZPOOL_CONFIG_VDEV_CHILDREN	"vdev_children"
 
 /*
  * The persistent vdev state is stored as separate values rather than a single
@@ -1173,6 +1201,8 @@ typedef enum dmu_objset_type {
 	DMU_OST_NUMTYPES
 } dmu_objset_type_t;
 
+#define	ZAP_MAXVALUELEN	(1024 * 8)
+
 /*
  * header for all bonus and spill buffers.
  * The header has a fixed portion with a variable number
@@ -1330,8 +1360,7 @@ typedef struct dsl_dataset_phys {
 #define	ZAP_HASHBITS		28
 #define	MZAP_ENT_LEN		64
 #define	MZAP_NAME_LEN		(MZAP_ENT_LEN - 8 - 4 - 2)
-#define	MZAP_MAX_BLKSHIFT	SPA_MAXBLOCKSHIFT
-#define	MZAP_MAX_BLKSZ		(1 << MZAP_MAX_BLKSHIFT)
+#define	MZAP_MAX_BLKSZ		SPA_OLD_MAXBLOCKSIZE
 
 typedef struct mzap_ent_phys {
 	uint64_t mze_value;
@@ -1343,7 +1372,8 @@ typedef struct mzap_ent_phys {
 typedef struct mzap_phys {
 	uint64_t mz_block_type;	/* ZBT_MICRO */
 	uint64_t mz_salt;
-	uint64_t mz_pad[6];
+	uint64_t mz_normflags;
+	uint64_t mz_pad[5];
 	mzap_ent_phys_t mz_chunk[1];
 	/* actually variable size depending on block size */
 } mzap_phys_t;
@@ -1400,6 +1430,8 @@ typedef struct zap_phys {
 	uint64_t zap_num_leafs;		/* number of leafs */
 	uint64_t zap_num_entries;	/* number of entries */
 	uint64_t zap_salt;		/* salt to stir into hash function */
+	uint64_t zap_normflags;		/* flags for u8_textprep_str() */
+	uint64_t zap_flags;		/* zap_flags_t */
 	/*
 	 * This structure is followed by padding, and then the embedded
 	 * pointer table.  The embedded pointer table takes up second
@@ -1410,9 +1442,12 @@ typedef struct zap_phys {
 
 typedef struct zap_table_phys zap_table_phys_t;
 
+struct spa;
 typedef struct fat_zap {
 	int zap_block_shift;			/* block size shift */
 	zap_phys_t *zap_phys;
+	const struct spa *zap_spa;
+	const dnode_phys_t *zap_dnode;
 } fat_zap_t;
 
 #define	ZAP_LEAF_MAGIC 0x2AB1EAF
@@ -1755,13 +1790,13 @@ typedef struct vdev {
 	int		v_ashift;	/* offset to block shift */
 	int		v_nparity;	/* # parity for raidz */
 	struct vdev	*v_top;		/* parent vdev */
-	int		v_nchildren;	/* # children */
+	size_t		v_nchildren;	/* # children */
 	vdev_state_t	v_state;	/* current state */
 	vdev_phys_read_t *v_phys_read;	/* read from raw leaf vdev */
 	vdev_read_t	*v_read;	/* read from vdev */
 	void		*v_read_priv;	/* private data for read function */
 	boolean_t	v_islog;
-	struct spa	*spa;		/* link to spa */
+	struct spa	*v_spa;		/* link to spa */
 	/*
 	 * Values stored in the config for an indirect or removing vdev.
 	 */
@@ -1780,11 +1815,10 @@ typedef struct spa {
 	uint64_t	spa_guid;	/* pool guid */
 	uint64_t	spa_txg;	/* most recent transaction */
 	struct uberblock spa_uberblock;	/* best uberblock so far */
-	vdev_list_t	spa_vdevs;	/* list of all toplevel vdevs */
+	vdev_t		*spa_root_vdev;	/* toplevel vdev container */
 	objset_phys_t	spa_mos;	/* MOS for this pool */
 	zio_cksum_salt_t spa_cksum_salt;	/* secret salt for cksum */
 	void		*spa_cksum_tmpls[ZIO_CHECKSUM_FUNCTIONS];
-	int		spa_inited;	/* initialized */
 	boolean_t	spa_with_log;	/* this pool has log */
 } spa_t;
 
@@ -1804,3 +1838,5 @@ typedef struct zio {
 } zio_t;
 
 static void decode_embedded_bp_compressed(const blkptr_t *, void *);
+
+#endif /* _ZFSIMPL_H_ */

@@ -438,6 +438,8 @@
         ..
         mdconfig
         ..
+        nvmecontrol
+        ..
         pfctl
             files
             ..
@@ -445,6 +447,8 @@
         ping
         ..
         ping6
+        ..
+        route
         ..
     ..
     secure
@@ -754,6 +758,8 @@
                 ..
                 mirror
                 ..
+                multipath
+                ..
                 nop
                 ..
                 part
@@ -995,6 +1001,8 @@
         fold
         ..
         getconf
+        ..
+        gh-bc
         ..
         grep
         ..

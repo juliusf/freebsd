@@ -5,7 +5,7 @@
 name = "FreeBSD-%PKGNAME%"
 origin = "base"
 version = "%VERSION%"
-comment = "%COMMENT% %VCS_REVISION%"
+comment = "%COMMENT%"
 categories = [ base ]
 maintainer = "re@FreeBSD.org"
 www = "https://www.FreeBSD.org"
@@ -22,12 +22,6 @@ scripts: {
 	services_mkdb %CAP_MKDB_ENDIAN% -q -o ${PKG_ROOTDIR}/var/db/services.db ${PKG_ROOTDIR}/etc/services
 	chmod 1777 ${PKG_ROOTDIR}/tmp
 EOD
-}
-deps: {
-    "FreeBSD-clibs": {
-        origin: "base"
-        version: "%VERSION%"
-    }
 }
 directories {
     /dev = "y";

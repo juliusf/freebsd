@@ -146,7 +146,8 @@ kproc_create(void (*func)(void *), void *arg,
 	/* Delay putting it on the run queue until now. */
 	if (!(flags & RFSTOPPED))
 		sched_add(td, SRQ_BORING); 
-	thread_unlock(td);
+	else
+		thread_unlock(td);
 
 	return 0;
 }
@@ -228,7 +229,6 @@ kproc_suspend_check(struct proc *p)
 	}
 	PROC_UNLOCK(p);
 }
-
 
 /*
  * Start a kernel thread.  
@@ -324,7 +324,6 @@ kthread_add(void (*func)(void *), void *arg, struct proc *p,
 	if (!(flags & RFSTOPPED)) {
 		thread_lock(newtd);
 		sched_add(newtd, SRQ_BORING); 
-		thread_unlock(newtd);
 	}
 	if (newtdp)
 		*newtdp = newtd;
@@ -442,12 +441,15 @@ kthread_suspend_check(void)
 		panic("%s: curthread is not a valid kthread", __func__);
 
 	/*
-	 * As long as the double-lock protection is used when accessing the
-	 * TDF_KTH_SUSP flag, synchronizing the read operation via proc mutex
-	 * is fine.
+	 * Setting the TDF_KTH_SUSP flag is protected by process lock.
+	 *
+	 * Do an unlocked read first to avoid serializing with all other threads
+	 * in the common case of not suspending.
 	 */
+	if ((td->td_flags & TDF_KTH_SUSP) == 0)
+		return;
 	PROC_LOCK(p);
-	while (td->td_flags & TDF_KTH_SUSP) {
+	while ((td->td_flags & TDF_KTH_SUSP) != 0) {
 		wakeup(&td->td_flags);
 		msleep(&td->td_flags, &p->p_mtx, PPAUSE, "ktsusp", 0);
 	}

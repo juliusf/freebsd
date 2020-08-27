@@ -82,19 +82,19 @@ _Static_assert(offsetof(struct thread, td_flags) == 0xfc,
     "struct thread KBI td_flags");
 _Static_assert(offsetof(struct thread, td_pflags) == 0x104,
     "struct thread KBI td_pflags");
-_Static_assert(offsetof(struct thread, td_frame) == 0x478,
+_Static_assert(offsetof(struct thread, td_frame) == 0x4a8,
     "struct thread KBI td_frame");
-_Static_assert(offsetof(struct thread, td_emuldata) == 0x690,
+_Static_assert(offsetof(struct thread, td_emuldata) == 0x6b0,
     "struct thread KBI td_emuldata");
 _Static_assert(offsetof(struct proc, p_flag) == 0xb0,
     "struct proc KBI p_flag");
 _Static_assert(offsetof(struct proc, p_pid) == 0xbc,
     "struct proc KBI p_pid");
-_Static_assert(offsetof(struct proc, p_filemon) == 0x3c8,
+_Static_assert(offsetof(struct proc, p_filemon) == 0x3b8,
     "struct proc KBI p_filemon");
-_Static_assert(offsetof(struct proc, p_comm) == 0x3e0,
+_Static_assert(offsetof(struct proc, p_comm) == 0x3d0,
     "struct proc KBI p_comm");
-_Static_assert(offsetof(struct proc, p_emuldata) == 0x4c0,
+_Static_assert(offsetof(struct proc, p_emuldata) == 0x4b0,
     "struct proc KBI p_emuldata");
 #endif
 #ifdef __i386__
@@ -102,19 +102,19 @@ _Static_assert(offsetof(struct thread, td_flags) == 0x98,
     "struct thread KBI td_flags");
 _Static_assert(offsetof(struct thread, td_pflags) == 0xa0,
     "struct thread KBI td_pflags");
-_Static_assert(offsetof(struct thread, td_frame) == 0x2f0,
+_Static_assert(offsetof(struct thread, td_frame) == 0x304,
     "struct thread KBI td_frame");
-_Static_assert(offsetof(struct thread, td_emuldata) == 0x338,
+_Static_assert(offsetof(struct thread, td_emuldata) == 0x348,
     "struct thread KBI td_emuldata");
 _Static_assert(offsetof(struct proc, p_flag) == 0x68,
     "struct proc KBI p_flag");
 _Static_assert(offsetof(struct proc, p_pid) == 0x74,
     "struct proc KBI p_pid");
-_Static_assert(offsetof(struct proc, p_filemon) == 0x278,
+_Static_assert(offsetof(struct proc, p_filemon) == 0x268,
     "struct proc KBI p_filemon");
-_Static_assert(offsetof(struct proc, p_comm) == 0x28c,
+_Static_assert(offsetof(struct proc, p_comm) == 0x27c,
     "struct proc KBI p_comm");
-_Static_assert(offsetof(struct proc, p_emuldata) == 0x318,
+_Static_assert(offsetof(struct proc, p_emuldata) == 0x308,
     "struct proc KBI p_emuldata");
 #endif
 
@@ -331,6 +331,7 @@ proc_linkup(struct proc *p, struct thread *td)
 void
 threadinit(void)
 {
+	uint32_t flags;
 
 	mtx_init(&tid_lock, "TID lock", NULL, MTX_DEF);
 
@@ -340,9 +341,20 @@ threadinit(void)
 	 */
 	tid_unrhdr = new_unrhdr(PID_MAX + 2, INT_MAX, &tid_lock);
 
+	flags = UMA_ZONE_NOFREE;
+#ifdef __aarch64__
+	/*
+	 * Force thread structures to be allocated from the direct map.
+	 * Otherwise, superpage promotions and demotions may temporarily
+	 * invalidate thread structure mappings.  For most dynamically allocated
+	 * structures this is not a problem, but translation faults cannot be
+	 * handled without accessing curthread.
+	 */
+	flags |= UMA_ZONE_CONTIG;
+#endif
 	thread_zone = uma_zcreate("THREAD", sched_sizeof_thread(),
 	    thread_ctor, thread_dtor, thread_init, thread_fini,
-	    32 - 1, UMA_ZONE_NOFREE);
+	    32 - 1, flags);
 	tidhashtbl = hashinit(maxproc / 2, M_TIDHASH, &tidhash);
 	rw_init(&tidhash_lock, "tidhash");
 }
@@ -451,7 +463,8 @@ thread_cow_get_proc(struct thread *newtd, struct proc *p)
 {
 
 	PROC_LOCK_ASSERT(p, MA_OWNED);
-	newtd->td_ucred = crhold(p->p_ucred);
+	newtd->td_realucred = crcowget(p->p_ucred);
+	newtd->td_ucred = newtd->td_realucred;
 	newtd->td_limit = lim_hold(p->p_limit);
 	newtd->td_cowgen = p->p_cowgen;
 }
@@ -460,7 +473,9 @@ void
 thread_cow_get(struct thread *newtd, struct thread *td)
 {
 
-	newtd->td_ucred = crhold(td->td_ucred);
+	MPASS(td->td_realucred == td->td_ucred);
+	newtd->td_realucred = crcowget(td->td_realucred);
+	newtd->td_ucred = newtd->td_realucred;
 	newtd->td_limit = lim_hold(td->td_limit);
 	newtd->td_cowgen = td->td_cowgen;
 }
@@ -469,8 +484,8 @@ void
 thread_cow_free(struct thread *td)
 {
 
-	if (td->td_ucred != NULL)
-		crfree(td->td_ucred);
+	if (td->td_realucred != NULL)
+		crcowfree(td);
 	if (td->td_limit != NULL)
 		lim_free(td->td_limit);
 }
@@ -483,13 +498,9 @@ thread_cow_update(struct thread *td)
 	struct plimit *oldlimit;
 
 	p = td->td_proc;
-	oldcred = NULL;
 	oldlimit = NULL;
 	PROC_LOCK(p);
-	if (td->td_ucred != p->p_ucred) {
-		oldcred = td->td_ucred;
-		td->td_ucred = crhold(p->p_ucred);
-	}
+	oldcred = crcowsync();
 	if (td->td_limit != p->p_limit) {
 		oldlimit = td->td_limit;
 		td->td_limit = lim_hold(p->p_limit);
@@ -532,6 +543,7 @@ thread_exit(void)
 	    (long)p->p_pid, td->td_name);
 	SDT_PROBE0(proc, , , lwp__exit);
 	KASSERT(TAILQ_EMPTY(&td->td_sigqueue.sq_list), ("signal pending"));
+	MPASS(td->td_realucred == td->td_ucred);
 
 	/*
 	 * drop FPU & debug register state storage, or any other
@@ -565,7 +577,6 @@ thread_exit(void)
 					thread_lock(p->p_singlethread);
 					wakeup_swapper = thread_unsuspend_one(
 						p->p_singlethread, p, false);
-					thread_unlock(p->p_singlethread);
 					if (wakeup_swapper)
 						kick_proc0();
 				}
@@ -606,7 +617,7 @@ thread_exit(void)
 
 	/* Save our resource usage in our process. */
 	td->td_ru.ru_nvcsw++;
-	ruxagg(p, td);
+	ruxagg_locked(p, td);
 	rucollect(&p->p_ru, &td->td_ru);
 	PROC_STATUNLOCK(p);
 
@@ -730,19 +741,36 @@ weed_inhib(int mode, struct thread *td2, struct proc *p)
 	THREAD_LOCK_ASSERT(td2, MA_OWNED);
 
 	wakeup_swapper = 0;
+
+	/*
+	 * Since the thread lock is dropped by the scheduler we have
+	 * to retry to check for races.
+	 */
+restart:
 	switch (mode) {
 	case SINGLE_EXIT:
-		if (TD_IS_SUSPENDED(td2))
+		if (TD_IS_SUSPENDED(td2)) {
 			wakeup_swapper |= thread_unsuspend_one(td2, p, true);
-		if (TD_ON_SLEEPQ(td2) && (td2->td_flags & TDF_SINTR) != 0)
+			thread_lock(td2);
+			goto restart;
+		}
+		if (TD_CAN_ABORT(td2)) {
 			wakeup_swapper |= sleepq_abort(td2, EINTR);
+			return (wakeup_swapper);
+		}
 		break;
 	case SINGLE_BOUNDARY:
 	case SINGLE_NO_EXIT:
-		if (TD_IS_SUSPENDED(td2) && (td2->td_flags & TDF_BOUNDARY) == 0)
+		if (TD_IS_SUSPENDED(td2) &&
+		    (td2->td_flags & TDF_BOUNDARY) == 0) {
 			wakeup_swapper |= thread_unsuspend_one(td2, p, false);
-		if (TD_ON_SLEEPQ(td2) && (td2->td_flags & TDF_SINTR) != 0)
+			thread_lock(td2);
+			goto restart;
+		}
+		if (TD_CAN_ABORT(td2)) {
 			wakeup_swapper |= sleepq_abort(td2, ERESTART);
+			return (wakeup_swapper);
+		}
 		break;
 	case SINGLE_ALLPROC:
 		/*
@@ -754,18 +782,25 @@ weed_inhib(int mode, struct thread *td2, struct proc *p)
 		 * is used to avoid immediate un-suspend.
 		 */
 		if (TD_IS_SUSPENDED(td2) && (td2->td_flags & (TDF_BOUNDARY |
-		    TDF_ALLPROCSUSP)) == 0)
+		    TDF_ALLPROCSUSP)) == 0) {
 			wakeup_swapper |= thread_unsuspend_one(td2, p, false);
-		if (TD_ON_SLEEPQ(td2) && (td2->td_flags & TDF_SINTR) != 0) {
+			thread_lock(td2);
+			goto restart;
+		}
+		if (TD_CAN_ABORT(td2)) {
 			if ((td2->td_flags & TDF_SBDRY) == 0) {
 				thread_suspend_one(td2);
 				td2->td_flags |= TDF_ALLPROCSUSP;
 			} else {
 				wakeup_swapper |= sleepq_abort(td2, ERESTART);
+				return (wakeup_swapper);
 			}
 		}
 		break;
+	default:
+		break;
 	}
+	thread_unlock(td2);
 	return (wakeup_swapper);
 }
 
@@ -842,9 +877,10 @@ thread_single(struct proc *p, int mode)
 #ifdef SMP
 			} else if (TD_IS_RUNNING(td2) && td != td2) {
 				forward_signal(td2);
+				thread_unlock(td2);
 #endif
-			}
-			thread_unlock(td2);
+			} else
+				thread_unlock(td2);
 		}
 		if (wakeup_swapper)
 			kick_proc0();
@@ -1028,7 +1064,6 @@ thread_suspend_check(int return_instead)
 				thread_lock(p->p_singlethread);
 				wakeup_swapper = thread_unsuspend_one(
 				    p->p_singlethread, p, false);
-				thread_unlock(p->p_singlethread);
 				if (wakeup_swapper)
 					kick_proc0();
 			}
@@ -1045,11 +1080,53 @@ thread_suspend_check(int return_instead)
 			td->td_flags |= TDF_BOUNDARY;
 		}
 		PROC_SUNLOCK(p);
-		mi_switch(SW_INVOL | SWT_SUSPEND, NULL);
-		thread_unlock(td);
+		mi_switch(SW_INVOL | SWT_SUSPEND);
 		PROC_LOCK(p);
 	}
 	return (0);
+}
+
+/*
+ * Check for possible stops and suspensions while executing a
+ * casueword or similar transiently failing operation.
+ *
+ * The sleep argument controls whether the function can handle a stop
+ * request itself or it should return ERESTART and the request is
+ * proceed at the kernel/user boundary in ast.
+ *
+ * Typically, when retrying due to casueword(9) failure (rv == 1), we
+ * should handle the stop requests there, with exception of cases when
+ * the thread owns a kernel resource, for instance busied the umtx
+ * key, or when functions return immediately if thread_check_susp()
+ * returned non-zero.  On the other hand, retrying the whole lock
+ * operation, we better not stop there but delegate the handling to
+ * ast.
+ *
+ * If the request is for thread termination P_SINGLE_EXIT, we cannot
+ * handle it at all, and simply return EINTR.
+ */
+int
+thread_check_susp(struct thread *td, bool sleep)
+{
+	struct proc *p;
+	int error;
+
+	/*
+	 * The check for TDF_NEEDSUSPCHK is racy, but it is enough to
+	 * eventually break the lockstep loop.
+	 */
+	if ((td->td_flags & TDF_NEEDSUSPCHK) == 0)
+		return (0);
+	error = 0;
+	p = td->td_proc;
+	PROC_LOCK(p);
+	if (p->p_flag & P_SINGLE_EXIT)
+		error = EINTR;
+	else if (P_SHOULDSTOP(p) ||
+	    ((p->p_flag & P_TRACED) && (td->td_dbgflags & TDB_SUSPEND)))
+		error = sleep ? thread_suspend_check(0) : ERESTART;
+	PROC_UNLOCK(p);
+	return (error);
 }
 
 void
@@ -1074,8 +1151,7 @@ thread_suspend_switch(struct thread *td, struct proc *p)
 	sched_sleep(td, 0);
 	PROC_SUNLOCK(p);
 	DROP_GIANT();
-	mi_switch(SW_VOL | SWT_SUSPEND, NULL);
-	thread_unlock(td);
+	mi_switch(SW_VOL | SWT_SUSPEND);
 	PICKUP_GIANT();
 	PROC_LOCK(p);
 	PROC_SLOCK(p);
@@ -1112,7 +1188,7 @@ thread_unsuspend_one(struct thread *td, struct proc *p, bool boundary)
 			p->p_boundary_count--;
 		}
 	}
-	return (setrunnable(td));
+	return (setrunnable(td, 0));
 }
 
 /*
@@ -1133,8 +1209,8 @@ thread_unsuspend(struct proc *p)
 			if (TD_IS_SUSPENDED(td)) {
 				wakeup_swapper |= thread_unsuspend_one(td, p,
 				    true);
-			}
-			thread_unlock(td);
+			} else
+				thread_unlock(td);
 		}
 	} else if (P_SHOULDSTOP(p) == P_STOPPED_SINGLE &&
 	    p->p_numthreads == p->p_suspcount) {
@@ -1147,7 +1223,6 @@ thread_unsuspend(struct proc *p)
 			thread_lock(p->p_singlethread);
 			wakeup_swapper = thread_unsuspend_one(
 			    p->p_singlethread, p, false);
-			thread_unlock(p->p_singlethread);
 		}
 	}
 	if (wakeup_swapper)
@@ -1193,8 +1268,8 @@ thread_single_end(struct proc *p, int mode)
 			if (TD_IS_SUSPENDED(td)) {
 				wakeup_swapper |= thread_unsuspend_one(td, p,
 				    mode == SINGLE_BOUNDARY);
-			}
-			thread_unlock(td);
+			} else
+				thread_unlock(td);
 		}
 	}
 	KASSERT(mode != SINGLE_BOUNDARY || p->p_boundary_count == 0,
@@ -1224,6 +1299,14 @@ tdfind(lwpid_t tid, pid_t pid)
 #define RUN_THRESH	16
 	struct thread *td;
 	int run = 0;
+
+	td = curthread;
+	if (td->td_tid == tid) {
+		if (pid != -1 && td->td_proc->p_pid != pid)
+			return (NULL);
+		PROC_LOCK(td->td_proc);
+		return (td);
+	}
 
 	rw_rlock(&tidhash_lock);
 	LIST_FOREACH(td, TIDHASH(tid), td_hash) {

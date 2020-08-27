@@ -97,6 +97,7 @@ static struct vop_vector udf_vnodeops = {
 	.vop_strategy =		udf_strategy,
 	.vop_vptofh =		udf_vptofh,
 };
+VFS_VOP_VECTOR_REGISTER(udf_vnodeops);
 
 struct vop_vector udf_fifoops = {
 	.vop_default =		&fifo_specops,
@@ -108,6 +109,7 @@ struct vop_vector udf_fifoops = {
 	.vop_setattr =		udf_setattr,
 	.vop_vptofh =		udf_vptofh,
 };
+VFS_VOP_VECTOR_REGISTER(udf_fifoops);
 
 static MALLOC_DEFINE(M_UDFFID, "udf_fid", "UDF FileId structure");
 static MALLOC_DEFINE(M_UDFDS, "udf_ds", "UDF Dirstream structure");
@@ -178,7 +180,7 @@ udf_access(struct vop_access_args *a)
 	mode = udf_permtomode(node);
 
 	return (vaccess(vp->v_type, mode, node->fentry->uid, node->fentry->gid,
-	    accmode, a->a_cred, NULL));
+	    accmode, a->a_cred));
 }
 
 static int

@@ -51,6 +51,7 @@ __FBSDID("$FreeBSD$");
 #include <net/if_types.h>
 #include <net/if_vlan_var.h>
 #include <net/route.h>
+#include <net/route/nhop.h>
 #include <netinet/in.h>
 #include <netinet/in_fib.h>
 #include <netinet/in_pcb.h>
@@ -946,9 +947,7 @@ t4_offload_socket(struct toedev *tod, void *arg, struct socket *so)
 {
 	struct adapter *sc = tod->tod_softc;
 	struct synq_entry *synqe = arg;
-#ifdef INVARIANTS
 	struct inpcb *inp = sotoinpcb(so);
-#endif
 	struct toepcb *toep = synqe->toep;
 
 	NET_EPOCH_ASSERT();	/* prevents bad race with accept() */
@@ -962,6 +961,9 @@ t4_offload_socket(struct toedev *tod, void *arg, struct socket *so)
 	toep->flags |= TPF_CPL_PENDING;
 	update_tid(sc, synqe->tid, toep);
 	synqe->flags |= TPF_SYNQE_EXPANDED;
+	inp->inp_flowtype = (inp->inp_vflag & INP_IPV6) ?
+	    M_HASHTYPE_RSS_TCP_IPV6 : M_HASHTYPE_RSS_TCP_IPV4;
+	inp->inp_flowid = synqe->rss_hash;
 }
 
 static void
@@ -988,7 +990,7 @@ t4opt_to_tcpopt(const struct tcp_options *t4opt, struct tcpopt *to)
 
 static void
 pass_accept_req_to_protohdrs(struct adapter *sc, const struct mbuf *m,
-    struct in_conninfo *inc, struct tcphdr *th)
+    struct in_conninfo *inc, struct tcphdr *th, uint8_t *iptos)
 {
 	const struct cpl_pass_accept_req *cpl = mtod(m, const void *);
 	const struct ether_header *eh;
@@ -1003,6 +1005,21 @@ pass_accept_req_to_protohdrs(struct adapter *sc, const struct mbuf *m,
 	} else {
 		l3hdr = ((uintptr_t)eh + G_ETH_HDR_LEN(hlen));
 		tcp = (const void *)(l3hdr + G_IP_HDR_LEN(hlen));
+	}
+
+	/* extract TOS (DiffServ + ECN) byte for AccECN */
+	if (iptos) {
+		if (((struct ip *)l3hdr)->ip_v == IPVERSION) {
+			const struct ip *ip = (const void *)l3hdr;
+			*iptos = ip->ip_tos;
+		}
+#ifdef INET6
+		else
+		if (((struct ip *)l3hdr)->ip_v == (IPV6_VERSION >> 4)) {
+			const struct ip6_hdr *ip6 = (const void *)l3hdr;
+			*iptos = (ntohl(ip6->ip6_flow) >> 20) & 0xff;
+		}
+#endif /* INET */
 	}
 
 	if (inc) {
@@ -1036,10 +1053,9 @@ get_l2te_for_nexthop(struct port_info *pi, struct ifnet *ifp,
 	struct l2t_entry *e;
 	struct sockaddr_in6 sin6;
 	struct sockaddr *dst = (void *)&sin6;
+	struct nhop_object *nh;
 
 	if (inc->inc_flags & INC_ISIPV6) {
-		struct nhop6_basic nh6;
-
 		bzero(dst, sizeof(struct sockaddr_in6));
 		dst->sa_len = sizeof(struct sockaddr_in6);
 		dst->sa_family = AF_INET6;
@@ -1050,24 +1066,28 @@ get_l2te_for_nexthop(struct port_info *pi, struct ifnet *ifp,
 			return (e);
 		}
 
-		if (fib6_lookup_nh_basic(RT_DEFAULT_FIB, &inc->inc6_faddr,
-		    0, 0, 0, &nh6) != 0)
+		nh = fib6_lookup(RT_DEFAULT_FIB, &inc->inc6_faddr, 0, NHR_NONE, 0);
+		if (nh == NULL)
 			return (NULL);
-		if (nh6.nh_ifp != ifp)
+		if (nh->nh_ifp != ifp)
 			return (NULL);
-		((struct sockaddr_in6 *)dst)->sin6_addr = nh6.nh_addr;
+		if (nh->nh_flags & NHF_GATEWAY)
+			((struct sockaddr_in6 *)dst)->sin6_addr = nh->gw6_sa.sin6_addr;
+		else
+			((struct sockaddr_in6 *)dst)->sin6_addr = inc->inc6_faddr;
 	} else {
-		struct nhop4_basic nh4;
-
 		dst->sa_len = sizeof(struct sockaddr_in);
 		dst->sa_family = AF_INET;
 
-		if (fib4_lookup_nh_basic(RT_DEFAULT_FIB, inc->inc_faddr, 0, 0,
-		    &nh4) != 0)
+		nh = fib4_lookup(RT_DEFAULT_FIB, inc->inc_faddr, 0, NHR_NONE, 0);
+		if (nh == NULL)
 			return (NULL);
-		if (nh4.nh_ifp != ifp)
+		if (nh->nh_ifp != ifp)
 			return (NULL);
-		((struct sockaddr_in *)dst)->sin_addr = nh4.nh_addr;
+		if (nh->nh_flags & NHF_GATEWAY)
+			((struct sockaddr_in *)dst)->sin_addr = nh->gw4_sa.sin_addr;
+		else
+			((struct sockaddr_in *)dst)->sin_addr = inc->inc_faddr;
 	}
 
 	e = t4_l2t_get(pi, ifp, dst);
@@ -1150,6 +1170,7 @@ do_pass_accept_req(struct sge_iq *iq, const struct rss_header *rss,
 	unsigned int opcode = G_CPL_OPCODE(be32toh(OPCODE_TID(cpl)));
 #endif
 	struct offload_settings settings;
+	uint8_t iptos;
 
 	KASSERT(opcode == CPL_PASS_ACCEPT_REQ,
 	    ("%s: unexpected opcode 0x%x", __func__, opcode));
@@ -1208,7 +1229,7 @@ found:
 	if (lctx->vnet != ifp->if_vnet)
 		REJECT_PASS_ACCEPT_REQ(true);
 
-	pass_accept_req_to_protohdrs(sc, m, &inc, &th);
+	pass_accept_req_to_protohdrs(sc, m, &inc, &th, &iptos);
 	if (inc.inc_flags & INC_ISIPV6) {
 
 		/* Don't offload if the ifcap isn't enabled */
@@ -1219,8 +1240,11 @@ found:
 		 * SYN must be directed to an IP6 address on this ifnet.  This
 		 * is more restrictive than in6_localip.
 		 */
-		if (!in6_ifhasaddr(ifp, &inc.inc6_laddr))
+		NET_EPOCH_ENTER(et);
+		if (!in6_ifhasaddr(ifp, &inc.inc6_laddr)) {
+			NET_EPOCH_EXIT(et);
 			REJECT_PASS_ACCEPT_REQ(true);
+		}
 
 		ntids = 2;
 	} else {
@@ -1233,23 +1257,26 @@ found:
 		 * SYN must be directed to an IP address on this ifnet.  This
 		 * is more restrictive than in_localip.
 		 */
-		if (!in_ifhasaddr(ifp, inc.inc_laddr))
+		NET_EPOCH_ENTER(et);
+		if (!in_ifhasaddr(ifp, inc.inc_laddr)) {
+			NET_EPOCH_EXIT(et);
 			REJECT_PASS_ACCEPT_REQ(true);
+		}
 
 		ntids = 1;
 	}
 
 	e = get_l2te_for_nexthop(pi, ifp, &inc);
-	if (e == NULL)
+	if (e == NULL) {
+		NET_EPOCH_EXIT(et);
 		REJECT_PASS_ACCEPT_REQ(true);
+	}
 
 	/* Don't offload if the 4-tuple is already in use */
-	NET_EPOCH_ENTER(et);	/* for 4-tuple check */
 	if (toe_4tuple_check(&inc, &th, ifp) != 0) {
 		NET_EPOCH_EXIT(et);
 		REJECT_PASS_ACCEPT_REQ(false);
 	}
-	NET_EPOCH_EXIT(et);
 
 	inp = lctx->inp;		/* listening socket, not owned by TOE */
 	INP_WLOCK(inp);
@@ -1257,6 +1284,7 @@ found:
 	/* Don't offload if the listening socket has closed */
 	if (__predict_false(inp->inp_flags & INP_DROPPED)) {
 		INP_WUNLOCK(inp);
+		NET_EPOCH_EXIT(et);
 		REJECT_PASS_ACCEPT_REQ(false);
 	}
 	so = inp->inp_socket;
@@ -1266,14 +1294,18 @@ found:
 	rw_runlock(&sc->policy_lock);
 	if (!settings.offload) {
 		INP_WUNLOCK(inp);
+		NET_EPOCH_EXIT(et);
 		REJECT_PASS_ACCEPT_REQ(true);	/* Rejected by COP. */
 	}
 
 	synqe = alloc_synqe(sc, lctx, M_NOWAIT);
 	if (synqe == NULL) {
 		INP_WUNLOCK(inp);
+		NET_EPOCH_EXIT(et);
 		REJECT_PASS_ACCEPT_REQ(true);
 	}
+	MPASS(rss->hash_type == RSS_HASH_TCP);
+	synqe->rss_hash = be32toh(rss->hash_val);
 	atomic_store_int(&synqe->ok_to_respond, 0);
 
 	init_conn_params(vi, &settings, &inc, so, &cpl->tcpopt, e->idx,
@@ -1284,7 +1316,7 @@ found:
 	 * syncache_add.  Note that syncache_add releases the pcb lock.
 	 */
 	t4opt_to_tcpopt(&cpl->tcpopt, &to);
-	toe_syncache_add(&inc, &to, &th, inp, tod, synqe);
+	toe_syncache_add(&inc, &to, &th, inp, tod, synqe, iptos);
 
 	if (atomic_load_int(&synqe->ok_to_respond) > 0) {
 		uint64_t opt0;
@@ -1302,15 +1334,19 @@ found:
 			remove_tid(sc, tid, ntids);
 			m = synqe->syn;
 			synqe->syn = NULL;
+			NET_EPOCH_EXIT(et);
 			REJECT_PASS_ACCEPT_REQ(true);
 		}
 
 		CTR6(KTR_CXGBE,
 		    "%s: stid %u, tid %u, synqe %p, opt0 %#016lx, opt2 %#08x",
 		    __func__, stid, tid, synqe, be64toh(opt0), be32toh(opt2));
-	} else
+	} else {
+		NET_EPOCH_EXIT(et);
 		REJECT_PASS_ACCEPT_REQ(false);
+	}
 
+	NET_EPOCH_EXIT(et);
 	CURVNET_RESTORE();
 	return (0);
 reject:
@@ -1350,9 +1386,10 @@ synqe_to_protohdrs(struct adapter *sc, struct synq_entry *synqe,
     struct tcphdr *th, struct tcpopt *to)
 {
 	uint16_t tcp_opt = be16toh(cpl->tcp_opt);
+	uint8_t iptos;
 
 	/* start off with the original SYN */
-	pass_accept_req_to_protohdrs(sc, synqe->syn, inc, th);
+	pass_accept_req_to_protohdrs(sc, synqe->syn, inc, th, &iptos);
 
 	/* modify parts to make it look like the ACK to our SYN|ACK */
 	th->th_flags = TH_ACK;
@@ -1407,7 +1444,7 @@ do_pass_establish(struct sge_iq *iq, const struct rss_header *rss,
 
 	ifp = synqe->syn->m_pkthdr.rcvif;
 	vi = ifp->if_softc;
-	KASSERT(vi->pi->adapter == sc,
+	KASSERT(vi->adapter == sc,
 	    ("%s: vi %p, sc %p mismatch", __func__, vi, sc));
 
 	if (__predict_false(inp->inp_flags & INP_DROPPED)) {

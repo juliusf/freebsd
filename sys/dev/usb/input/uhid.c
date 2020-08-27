@@ -80,7 +80,8 @@ __FBSDID("$FreeBSD$");
 #ifdef USB_DEBUG
 static int uhid_debug = 0;
 
-static SYSCTL_NODE(_hw_usb, OID_AUTO, uhid, CTLFLAG_RW, 0, "USB uhid");
+static SYSCTL_NODE(_hw_usb, OID_AUTO, uhid, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "USB uhid");
 SYSCTL_INT(_hw_usb_uhid, OID_AUTO, debug, CTLFLAG_RWTUN,
     &uhid_debug, 0, "Debug level");
 #endif
@@ -450,10 +451,6 @@ uhid_get_report(struct uhid_softc *sc, uint8_t type,
 
 	if (kern_data == NULL) {
 		kern_data = malloc(len, M_USBDEV, M_WAITOK);
-		if (kern_data == NULL) {
-			err = ENOMEM;
-			goto done;
-		}
 		free_data = 1;
 	}
 	err = usbd_req_get_report(sc->sc_udev, NULL, kern_data,
@@ -486,10 +483,6 @@ uhid_set_report(struct uhid_softc *sc, uint8_t type,
 
 	if (kern_data == NULL) {
 		kern_data = malloc(len, M_USBDEV, M_WAITOK);
-		if (kern_data == NULL) {
-			err = ENOMEM;
-			goto done;
-		}
 		free_data = 1;
 		err = copyin(user_data, kern_data, len);
 		if (err) {
