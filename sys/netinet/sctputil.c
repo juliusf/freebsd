@@ -1728,6 +1728,7 @@ sctp_timeout_handler(void *t)
 	stcb = (struct sctp_tcb *)tmr->tcb;
 	net = (struct sctp_nets *)tmr->net;
 	CURVNET_SET((struct vnet *)tmr->vnet);
+	NET_EPOCH_ENTER(et);
 	did_output = 1;
 	released_asoc_reference = false;
 
@@ -1787,7 +1788,6 @@ sctp_timeout_handler(void *t)
 
 	/* Record in stopped_from which timeout occurred. */
 	tmr->stopped_from = type;
-	NET_EPOCH_ENTER(et);
 	/* mark as being serviced now */
 	if (SCTP_OS_TIMER_PENDING(&tmr->timer)) {
 		/*
@@ -4240,7 +4240,7 @@ sctp_ulp_notify(uint32_t notification, struct sctp_tcb *stcb,
 }
 
 void
-sctp_report_all_outbound(struct sctp_tcb *stcb, uint16_t error, int holds_lock, int so_locked)
+sctp_report_all_outbound(struct sctp_tcb *stcb, uint16_t error, int so_locked)
 {
 	struct sctp_association *asoc;
 	struct sctp_stream_out *outs;
@@ -4262,9 +4262,6 @@ sctp_report_all_outbound(struct sctp_tcb *stcb, uint16_t error, int holds_lock, 
 		return;
 	}
 	/* now through all the gunk freeing chunks */
-	if (holds_lock == 0) {
-		SCTP_TCB_SEND_LOCK(stcb);
-	}
 	/* sent queue SHOULD be empty */
 	TAILQ_FOREACH_SAFE(chk, &asoc->sent_queue, sctp_next, nchk) {
 		TAILQ_REMOVE(&asoc->sent_queue, chk, sctp_next);
@@ -4341,10 +4338,6 @@ sctp_report_all_outbound(struct sctp_tcb *stcb, uint16_t error, int holds_lock, 
 			/* sa_ignore FREED_MEMORY */
 		}
 	}
-
-	if (holds_lock == 0) {
-		SCTP_TCB_SEND_UNLOCK(stcb);
-	}
 }
 
 void
@@ -4364,8 +4357,11 @@ sctp_abort_notification(struct sctp_tcb *stcb, uint8_t from_peer, uint16_t error
 	    (stcb->asoc.state & SCTP_STATE_CLOSED_SOCKET)) {
 		return;
 	}
+	SCTP_TCB_SEND_LOCK(stcb);
+	SCTP_ADD_SUBSTATE(stcb, SCTP_STATE_WAS_ABORTED);
 	/* Tell them we lost the asoc */
-	sctp_report_all_outbound(stcb, error, 0, so_locked);
+	sctp_report_all_outbound(stcb, error, so_locked);
+	SCTP_TCB_SEND_UNLOCK(stcb);
 	if (from_peer) {
 		sctp_ulp_notify(SCTP_NOTIFY_ASSOC_REM_ABORTED, stcb, error, abort, so_locked);
 	} else {
@@ -4394,7 +4390,6 @@ sctp_abort_association(struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 	if (stcb != NULL) {
 		/* We have a TCB to abort, send notification too */
 		sctp_abort_notification(stcb, 0, 0, NULL, SCTP_SO_NOT_LOCKED);
-		SCTP_ADD_SUBSTATE(stcb, SCTP_STATE_WAS_ABORTED);
 		/* Ok, now lets free it */
 		SCTP_STAT_INCR_COUNTER32(sctps_aborted);
 		if ((SCTP_GET_STATE(stcb) == SCTP_STATE_OPEN) ||
@@ -4483,8 +4478,6 @@ sctp_abort_an_association(struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 			}
 		}
 		return;
-	} else {
-		SCTP_ADD_SUBSTATE(stcb, SCTP_STATE_WAS_ABORTED);
 	}
 	/* notify the peer */
 	sctp_send_abort_tcb(stcb, op_err, so_locked);
