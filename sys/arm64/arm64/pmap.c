@@ -600,7 +600,6 @@ pmap_l3_valid(pt_entry_t l3)
 	return ((l3 & ATTR_DESCR_MASK) == L3_PAGE);
 }
 
-
 CTASSERT(L1_BLOCK == L2_BLOCK);
 
 static pt_entry_t
@@ -1422,7 +1421,6 @@ pmap_map(vm_offset_t *virt, vm_paddr_t start, vm_paddr_t end, int prot)
 	return PHYS_TO_DMAP(start);
 }
 
-
 /*
  * Add a list of wired pages to the kva
  * this routine is only used for temporary
@@ -2059,7 +2057,6 @@ pmap_growkernel(vm_offset_t addr)
 		}
 	}
 }
-
 
 /***************************************************
  * page management routines.
@@ -2883,7 +2880,6 @@ pmap_remove(pmap_t pmap, vm_offset_t sva, vm_offset_t eva)
 
 	lock = NULL;
 	for (; sva < eva; sva = va_next) {
-
 		if (pmap->pm_stats.resident_count == 0)
 			break;
 
@@ -3137,7 +3133,6 @@ pmap_protect(pmap_t pmap, vm_offset_t sva, vm_offset_t eva, vm_prot_t prot)
 
 	PMAP_LOCK(pmap);
 	for (; sva < eva; sva = va_next) {
-
 		l0 = pmap_l0(pmap, sva);
 		if (pmap_load(l0) == 0) {
 			va_next = (sva + L0_SIZE) & ~L0_OFFSET;
@@ -5961,7 +5956,7 @@ pmap_mincore(pmap_t pmap, vm_offset_t addr, vm_paddr_t *pap)
 		managed = (tpte & ATTR_SW_MANAGED) != 0;
 		val = MINCORE_INCORE;
 		if (lvl != 3)
-			val |= MINCORE_SUPER;
+			val |= MINCORE_PSIND(3 - lvl);
 		if ((managed && pmap_pte_dirty(pmap, tpte)) || (!managed &&
 		    (tpte & ATTR_S1_AP_RW_BIT) == ATTR_S1_AP(ATTR_S1_AP_RW)))
 			val |= MINCORE_MODIFIED | MINCORE_MODIFIED_OTHER;

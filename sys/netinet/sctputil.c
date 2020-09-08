@@ -736,7 +736,6 @@ sctp_auditing(int from, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 		    stcb->asoc.total_flight, tot_out);
 		/* now corrective action */
 		TAILQ_FOREACH(lnet, &stcb->asoc.nets, sctp_next) {
-
 			tot_out = 0;
 			TAILQ_FOREACH(chk, &stcb->asoc.sent_queue, sctp_next) {
 				if ((chk->whoTo == lnet) &&
@@ -1440,7 +1439,6 @@ sctp_expand_mapping_array(struct sctp_association *asoc, uint32_t needed)
 	return (0);
 }
 
-
 static void
 sctp_iterator_work(struct sctp_iterator *it)
 {
@@ -1620,7 +1618,6 @@ sctp_iterator_worker(void)
 	sctp_it_ctl.iterator_running = 0;
 	return;
 }
-
 
 static void
 sctp_handle_addr_wq(void)
@@ -2925,7 +2922,6 @@ sctp_mtu_size_reset(struct sctp_inpcb *inp,
 	}
 }
 
-
 /*
  * Given an association and starting time of the current RTT period, update
  * RTO in number of msecs. net should point to the current network.
@@ -3090,8 +3086,6 @@ sctp_m_getptr(struct mbuf *m, int off, int len, uint8_t *in_ptr)
 	}
 }
 
-
-
 struct sctp_paramhdr *
 sctp_get_next_param(struct mbuf *m,
     int offset,
@@ -3102,7 +3096,6 @@ sctp_get_next_param(struct mbuf *m,
 	return ((struct sctp_paramhdr *)sctp_m_getptr(m, offset, pull_limit,
 	    (uint8_t *)pull));
 }
-
 
 struct mbuf *
 sctp_add_pad_tombuf(struct mbuf *m, int padlen)
@@ -3376,7 +3369,6 @@ sctp_notify_peer_addr_change(struct sctp_tcb *stcb, uint32_t state,
 	    so_locked);
 }
 
-
 static void
 sctp_notify_send_failed(struct sctp_tcb *stcb, uint8_t sent, uint32_t error,
     struct sctp_tmit_chunk *chk, int so_locked)
@@ -3508,7 +3500,6 @@ sctp_notify_send_failed(struct sctp_tcb *stcb, uint8_t sent, uint32_t error,
 	    so_locked);
 }
 
-
 static void
 sctp_notify_send_failed2(struct sctp_tcb *stcb, uint32_t error,
     struct sctp_stream_queue_pending *sp, int so_locked)
@@ -3604,8 +3595,6 @@ sctp_notify_send_failed2(struct sctp_tcb *stcb, uint32_t error,
 	    control,
 	    &stcb->sctp_socket->so_rcv, 1, SCTP_READ_LOCK_NOT_HELD, so_locked);
 }
-
-
 
 static void
 sctp_notify_adaptation_layer(struct sctp_tcb *stcb)
@@ -3823,7 +3812,6 @@ sctp_notify_sender_dry_event(struct sctp_tcb *stcb,
 	    &stcb->sctp_socket->so_rcv, 1, SCTP_READ_LOCK_NOT_HELD, so_locked);
 }
 
-
 void
 sctp_notify_stream_reset_add(struct sctp_tcb *stcb, uint16_t numberin, uint16_t numberout, int flag)
 {
@@ -3930,8 +3918,6 @@ sctp_notify_stream_reset_tsn(struct sctp_tcb *stcb, uint32_t sending_tsn, uint32
 	    &stcb->sctp_socket->so_rcv, 1, SCTP_READ_LOCK_NOT_HELD, SCTP_SO_NOT_LOCKED);
 }
 
-
-
 static void
 sctp_notify_stream_reset(struct sctp_tcb *stcb,
     int number_entries, uint16_t *list, int flag)
@@ -3995,7 +3981,6 @@ sctp_notify_stream_reset(struct sctp_tcb *stcb,
 	    control,
 	    &stcb->sctp_socket->so_rcv, 1, SCTP_READ_LOCK_NOT_HELD, SCTP_SO_NOT_LOCKED);
 }
-
 
 static void
 sctp_notify_remote_error(struct sctp_tcb *stcb, uint16_t error, struct sctp_error_chunk *chunk)
@@ -4061,7 +4046,6 @@ sctp_notify_remote_error(struct sctp_tcb *stcb, uint16_t error, struct sctp_erro
 		sctp_m_freem(m_notify);
 	}
 }
-
 
 void
 sctp_ulp_notify(uint32_t notification, struct sctp_tcb *stcb,
@@ -5015,7 +4999,6 @@ sctp_free_bufspace(struct sctp_tcb *stcb, struct sctp_association *asoc,
 			stcb->sctp_socket->so_snd.sb_cc -= tp1->book_size;
 		} else {
 			stcb->sctp_socket->so_snd.sb_cc = 0;
-
 		}
 	}
 }
@@ -5556,7 +5539,6 @@ sctp_sorecvmsg(struct socket *so,
 		sctp_misc_ints(SCTP_SORECV_ENTERPL,
 		    rwnd_req, block_allowed, so->so_rcv.sb_cc, (uint32_t)uio->uio_resid);
 	}
-
 
 	error = sblock(&so->so_rcv, (block_allowed ? SBL_WAIT : 0));
 	if (error) {
@@ -6434,7 +6416,6 @@ stage_left:
 	return (error);
 }
 
-
 #ifdef SCTP_MBUF_LOGGING
 struct mbuf *
 sctp_m_free(struct mbuf *m)
@@ -6500,7 +6481,6 @@ sctp_dynamic_set_primary(struct sockaddr *sa, uint32_t vrf_id)
 	SCTP_WQ_ADDR_UNLOCK();
 	return (0);
 }
-
 
 int
 sctp_soreceive(struct socket *so,
@@ -6572,10 +6552,6 @@ sctp_soreceive(struct socket *so,
 	}
 	return (error);
 }
-
-
-
-
 
 int
 sctp_connectx_helper_add(struct sctp_tcb *stcb, struct sockaddr *addr,

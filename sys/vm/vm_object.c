@@ -278,7 +278,7 @@ vm_object_init(void)
 {
 	TAILQ_INIT(&vm_object_list);
 	mtx_init(&vm_object_list_mtx, "vm object_list", NULL, MTX_DEF);
-	
+
 	rw_init(&kernel_object->lock, "kernel vm object");
 	_vm_object_allocate(OBJT_PHYS, atop(VM_MAX_KERNEL_ADDRESS -
 	    VM_MIN_KERNEL_ADDRESS), OBJ_UNMANAGED, kernel_object, NULL);
@@ -555,7 +555,6 @@ vm_object_deallocate_vnode(vm_object_t object)
 	/* vrele may need the vnode lock. */
 	vrele(vp);
 }
-
 
 /*
  * We dropped a reference on an object and discovered that it had a
@@ -1497,7 +1496,7 @@ vm_object_shadow(vm_object_t *object, vm_ooffset_t *offset, vm_size_t length,
 void
 vm_object_split(vm_map_entry_t entry)
 {
-	vm_page_t m, m_next;
+	vm_page_t m, m_busy, m_next;
 	vm_object_t orig_object, new_object, backing_object;
 	vm_pindex_t idx, offidxstart;
 	vm_size_t size;
@@ -1554,8 +1553,14 @@ vm_object_split(vm_map_entry_t entry)
 	 * that the object is in transition.
 	 */
 	vm_object_set_flag(orig_object, OBJ_SPLIT);
+	m_busy = NULL;
+#ifdef INVARIANTS
+	idx = 0;
+#endif
 retry:
 	m = vm_page_find_least(orig_object, offidxstart);
+	KASSERT(m == NULL || idx <= m->pindex - offidxstart,
+	    ("%s: object %p was repopulated", __func__, orig_object));
 	for (; m != NULL && (idx = m->pindex - offidxstart) < size;
 	    m = m_next) {
 		m_next = TAILQ_NEXT(m, listq);
@@ -1610,8 +1615,15 @@ retry:
 		 */
 		vm_reserv_rename(m, new_object, orig_object, offidxstart);
 #endif
+
+		/*
+		 * orig_object's type may change while sleeping, so keep track
+		 * of the beginning of the busied range.
+		 */
 		if (orig_object->type != OBJT_SWAP)
 			vm_page_xunbusy(m);
+		else if (m_busy == NULL)
+			m_busy = m;
 	}
 	if (orig_object->type == OBJT_SWAP) {
 		/*
@@ -1619,8 +1631,9 @@ retry:
 		 * and new_object's locks are released and reacquired. 
 		 */
 		swap_pager_copy(orig_object, new_object, offidxstart, 0);
-		TAILQ_FOREACH(m, &new_object->memq, listq)
-			vm_page_xunbusy(m);
+		if (m_busy != NULL)
+			TAILQ_FOREACH_FROM(m_busy, &new_object->memq, listq)
+				vm_page_xunbusy(m_busy);
 	}
 	vm_object_clear_flag(orig_object, OBJ_SPLIT);
 	VM_OBJECT_WUNLOCK(orig_object);
@@ -2269,7 +2282,6 @@ vm_object_coalesce(vm_object_t prev_object, vm_ooffset_t prev_offset,
 	 * Account for the charge.
 	 */
 	if (prev_object->cred != NULL) {
-
 		/*
 		 * If prev_object was charged, then this mapping,
 		 * although not charged now, may become writable
@@ -2434,7 +2446,6 @@ vm_object_vnode(vm_object_t object)
 	}
 	return (vp);
 }
-
 
 /*
  * Busy the vm object.  This prevents new pages belonging to the object from

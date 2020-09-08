@@ -318,10 +318,6 @@ struct sctp_shutdown_ack_chunk {
 	struct sctp_chunkhdr ch;
 }                       SCTP_PACKED;
 
-struct sctp_pad_chunk {
-	struct sctp_chunkhdr ch;
-	/* padding data follow */
-} SCTP_PACKED;
 
 /* Operation Error (ERROR) */
 struct sctp_error_chunk {
