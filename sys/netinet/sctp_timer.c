@@ -1564,7 +1564,7 @@ sctp_pathmtu_timer(struct sctp_inpcb *inp,
 					net->src_addr_selected = 1;
 			}
 			if (net->ro._s_addr) {
-				mtu = net->ro.ro_mtu;
+				mtu = SCTP_GATHER_MTU_FROM_ROUTE(net->ro._s_addr, &net->ro._s_addr.sa, net->ro.ro_nh);
 #if defined(INET) || defined(INET6)
 				if (net->port) {
 					mtu -= sizeof(struct udphdr);
@@ -1615,7 +1615,7 @@ sctp_pathmtu_timer(struct sctp_inpcb *inp,
 				net->src_addr_selected = 1;
 		}
 		if (net->ro._s_addr) {
-			mtu = net->ro.ro_mtu;
+			mtu = SCTP_GATHER_MTU_FROM_ROUTE(net->ro._s_addr, &net->ro._s_addr.sa, net->ro.ro_nh);
 #if defined(INET) || defined(INET6)
 			if (net->port) {
 				mtu -= sizeof(struct udphdr);
