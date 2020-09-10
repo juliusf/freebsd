@@ -224,6 +224,5 @@ sctp_initialize_auth_params(struct sctp_inpcb *inp,
     struct sctp_tcb *stcb);
 void
 sctp_zero_m(struct mbuf *m, uint32_t m_offset, uint32_t size);
-
 /* test functions */
 #endif				/* __SCTP_AUTH_H__ */
